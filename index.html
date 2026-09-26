@@ -242,12 +242,23 @@ async function buildSelected(){
 async function playResource(cardId){
  const p=me();if(room.roundPhase!=="play"||room.turnUid!==uid)return;
  const idx=p.cards.findIndex(c=>c.id===cardId);if(idx<0)return;const card=p.cards[idx];
- if(card.type!=="resource")return;
+ 
+ // อนุญาตให้ใช้การ์ดประเภททรัพยากรหรือเพิ่มของได้ทันทีในตาเล่น
  const r={...p.resources};
- Object.entries(card.eff||{}).forEach(([k,v])=>r[k]=(r[k]||0)+v);
+ if(card.eff) {
+   Object.entries(card.eff).forEach(([k,v])=>r[k]=(r[k]||0)+v);
+ } else {
+   // เผื่อกรณีการ์ดไม่มี eff สำเร็จรูป ให้เพิ่มทรัพยากรพื้นฐานตามไอดีการ์ด
+   if(card.cardId==="wood") r.wood=(r.wood||0)+3;
+   else if(card.cardId==="brick") r.brick=(r.brick||0)+3;
+   else if(card.cardId==="energy") r.energy=(r.energy||0)+2;
+   else if(card.cardId==="money"||card.cardId==="gift") r.gold=(r.gold||0)+10;
+   else r.gold=(r.gold||0)+5;
+ }
+
  const cards=p.cards.filter(c=>c.id!==cardId);
  await patch({players:room.players.map(x=>x.uid===uid?{...x,resources:r,cards}:x),
- log:logAdd(`🎁 ${p.name} ใช้การ์ด "${card.n}" ได้ทรัพยากรตามการ์ด`)});
+ log:logAdd(`🎁 ${p.name} ใช้การ์ด "${card.n}" สำเร็จ`)});
 }
 async function playObstacle(cardId,targetUid){
  const p=me();if(room.roundPhase!=="play"||room.turnUid!==uid||p.playUsed)return;
