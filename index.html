@@ -75,14 +75,13 @@ import {getFirestore,doc,getDoc,setDoc,updateDoc,onSnapshot,runTransaction}
 from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
 /* ===================== FIREBASE ===================== */
-const firebaseConfig = {
-  apiKey: "AIzaSyB2xWjr4nxGHQX6MUoxs2q9X8U3JjRnKB8",
+const firebaseConfig={
+  apiKey: "AIzaSyB2xwjr4nxGHQX6MUoxs2q9X8U3jjRnKB8",
   authDomain: "city-tycoon-game-a4928.firebaseapp.com",
   projectId: "city-tycoon-game-a4928",
-  storageBucket: "city-tycoon-game-a4928.firebasestorage.app",
+  storageBucket: "city-tycoon-game-a4928.appspot.com",
   messagingSenderId: "365487358268",
-  appId: "1:365487358268:web:03a38434443c5678191e39",
-  measurementId: "G-F1PST9HDKC"
+  appId: "1:365487358268:web:03a38434443c5678191e39"
 };
 let db=null;
 if(firebaseConfig.apiKey!=="YOUR_API_KEY") db=getFirestore(initializeApp(firebaseConfig));
