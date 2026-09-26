@@ -135,19 +135,29 @@ if(firebaseConfig.apiKey!=='YOUR_API_KEY'){
 }
 
 const RES={wood:{n:'ไม้',i:'🪵'},brick:{n:'อิฐ',i:'🧱'},energy:{n:'ไฟฟ้า',i:'⚡'},gold:{n:'เงิน',i:'💰'}};
-const BUILD={
-  house:{n:'บ้านเล็ก',cost:{wood:2,brick:1,energy:0,gold:5},pts:10,ic:'🏠'},
-  mall:{n:'ห้างสรรพสินค้า',cost:{wood:4,brick:3,energy:2,gold:20},pts:35,ic:'🏬'},
-  powerplant:{n:'โรงไฟฟ้า',cost:{wood:3,brick:5,energy:0,gold:15},pts:30,ic:'⚡'}
-};
 const CARDS=[
-  {n:'ตึกระฟ้าคริสตัล',d:'ให้คะแนนสูงถึง 50 แต้ม',min:15,pts:50,ic:'🏙️'},
-  {n:'สวนสนุกกลางเมือง',d:'ให้คะแนน 40 แต้ม',min:12,pts:40,ic:'🎡'},
-  {n:'ท่าเรือการค้า',d:'ให้คะแนน 35 แต้ม',min:10,pts:35,ic:'🚢'}
+  {n:'บ้านจัดสรร',ic:'🏠',d:'สิ่งปลูกสร้างขนาดเล็ก',min:8,pts:15,cost:{wood:2,brick:1,energy:0,gold:5}},
+  {n:'ห้างสรรพสินค้า',ic:'🏬',d:'สิ่งปลูกสร้างขนาดกลาง',min:14,pts:30,cost:{wood:4,brick:3,energy:2,gold:15}},
+  {n:'ตึกระฟ้าคริสตัล',ic:'🏙️',d:'สิ่งปลูกสร้างขนาดใหญ่',min:20,pts:50,cost:{wood:6,brick:4,energy:3,gold:25}}
 ];
+const DECK=[
+  {ic:'🪵',n:'กองไม้ริมป่า',k:'gain',eff:{wood:3},w:3},
+  {ic:'🧱',n:'รถขนอิฐ',k:'gain',eff:{brick:3},w:3},
+  {ic:'⚡',n:'แผงโซลาร์เซลล์',k:'gain',eff:{energy:2},w:3},
+  {ic:'💰',n:'โบนัสรัฐบาล',k:'gain',eff:{gold:10},w:3},
+  {ic:'🎁',n:'ของขวัญปริศนา',k:'gain',eff:{wood:1,brick:1,energy:1,gold:5},w:2},
+  {ic:'🕵️',n:'โจรกลางคืน',k:'steal',res:'gold',amt:6,w:2},
+  {ic:'🐀',n:'หนูแทะไม้',k:'steal',res:'wood',amt:3,w:2},
+  {ic:'🌪️',n:'พายุถล่มเมือง',k:'chaos',res:'brick',amt:2,w:1},
+  {ic:'🔌',n:'ไฟดับทั้งเมือง',k:'chaos',res:'energy',amt:1,w:1},
+  {ic:'🔄',n:'สลับโชคชะตา',k:'swap',res:'gold',w:1}
+];
+const BOARD_N=36;
 const AVATARS=['🧑‍🚀','🧑‍🎤','🧑‍🌾','🧑‍🔧','🧑‍🎨','🧑‍🚒'];
 let uid=null;
-let room=null, code=null, unsub=null, joinMode=null, newMaxP=4, err='';
+let room=null, code=null, unsub=null, joinMode=null, newMaxP=4, err='', selIid=null;
+
+function pickCard(){const pool=[];DECK.forEach(c=>{for(let i=0;i<c.w;i++)pool.push(c)});return pool[Math.floor(Math.random()*pool.length)];}
 
 function esc(s){return (s||'').replace(/[<>&"]/g,c=>({ '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 function genCode(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<4;i++)s+=c[Math.floor(Math.random()*c.length)];return s}
@@ -159,9 +169,9 @@ async function createRoom(name){
   err='';
   if(!fdb){err='ยังไม่ได้ตั้งค่า Firebase (ดูคอมเมนต์ด้านบนของโค้ด)';render();return}
   const c=genCode();
-  const p={uid,name:name||'ผู้เล่น',resources:{wood:5,brick:5,energy:3,gold:30},grid:Array(25).fill(null),score:0,cardsWon:[],farmed:false,built:false};
+  const p={uid,name:name||'ผู้เล่น',resources:{wood:5,brick:5,energy:3,gold:30},score:0,cardsWon:[],farmed:false,built:false,lastCard:null};
   const data={code:c,hostUid:uid,maxPlayers:newMaxP,started:false,round:1,roundPhase:'lobby',
-    players:[p],auctionIndex:0,auctionOrder:[],auctionPos:0,bids:{},auctionResult:null};
+    players:[p],board:Array(BOARD_N).fill(null),log:[],auctionIndex:0,auctionOrder:[],auctionPos:0,bids:{},auctionResult:null};
   await setDoc(roomRef(c),data);
   code=c; localStorage.setItem('ctp_code',c); localStorage.setItem('ctp_name',name||'');
   subscribe();
@@ -178,7 +188,7 @@ async function joinRoom(c,name){
   if(!exist){
     if(data.started){err='เกมเริ่มไปแล้ว เข้าร่วมไม่ได้';render();return}
     if(data.players.length>=data.maxPlayers){err='ห้องเต็มแล้ว';render();return}
-    data.players.push({uid,name:name||'ผู้เล่น',resources:{wood:5,brick:5,energy:3,gold:30},grid:Array(25).fill(null),score:0,cardsWon:[],farmed:false,built:false});
+    data.players.push({uid,name:name||'ผู้เล่น',resources:{wood:5,brick:5,energy:3,gold:30},score:0,cardsWon:[],farmed:false,built:false,lastCard:null});
     await updateDoc(roomRef(c),{players:data.players});
   }
   code=c; localStorage.setItem('ctp_code',c); localStorage.setItem('ctp_name',name||'');
@@ -204,18 +214,54 @@ async function startGame(){
   await upd({started:true,roundPhase:'farm'});
 }
 
-async function doFarm(){
-  const players=room.players.map(p=>{
-    if(p.uid!==uid)return p;
-    return {...p,farmed:true,resources:{
-      wood:p.resources.wood+Math.floor(Math.random()*3)+1,
-      brick:p.resources.brick+Math.floor(Math.random()*3)+1,
-      energy:p.resources.energy+Math.floor(Math.random()*2),
-      gold:p.resources.gold+10
-    }};
-  });
+function applyCard(players,drawerUid,card){
+  const idx=players.findIndex(p=>p.uid===drawerUid);
+  let log='';
+  if(card.k==='gain'){
+    const p=players[idx], r={...p.resources};
+    Object.entries(card.eff).forEach(([k,v])=>r[k]=(r[k]||0)+v);
+    players=players.map((pl,i)=>i===idx?{...pl,resources:r,lastCard:card}:pl);
+    log=`${card.ic} ${p.name} จั่วได้ "${card.n}"`;
+  }else if(card.k==='steal'){
+    const others=players.filter(p=>p.uid!==drawerUid&&p.resources[card.res]>0);
+    if(others.length){
+      const t=others[Math.floor(Math.random()*others.length)];
+      const amt=Math.min(card.amt,t.resources[card.res]);
+      players=players.map(pl=>{
+        if(pl.uid===t.uid)return {...pl,resources:{...pl.resources,[card.res]:pl.resources[card.res]-amt}};
+        if(pl.uid===drawerUid)return {...pl,resources:{...pl.resources,[card.res]:pl.resources[card.res]+amt},lastCard:card};
+        return pl;
+      });
+      log=`${card.ic} ${players[idx].name} ขโมย${RES[card.res].n} ${amt} จาก ${t.name}!`;
+    }else{
+      players=players.map((pl,i)=>i===idx?{...pl,lastCard:card}:pl);
+      log=`${card.ic} ${players[idx].name} จั่ว "${card.n}" แต่ไม่มีใครให้ขโมย`;
+    }
+  }else if(card.k==='chaos'){
+    players=players.map(pl=>pl.uid===drawerUid?{...pl,lastCard:card}:{...pl,resources:{...pl.resources,[card.res]:Math.max(0,pl.resources[card.res]-card.amt)}});
+    log=`${card.ic} ${players[idx].name} จั่ว "${card.n}" ทุกคนเสีย${RES[card.res].n} ${card.amt}!`;
+  }else if(card.k==='swap'){
+    const others=players.filter(p=>p.uid!==drawerUid);
+    if(others.length){
+      const t=others[Math.floor(Math.random()*others.length)];
+      const myVal=players[idx].resources[card.res], tVal=t.resources[card.res];
+      players=players.map(pl=>{
+        if(pl.uid===drawerUid)return {...pl,resources:{...pl.resources,[card.res]:tVal},lastCard:card};
+        if(pl.uid===t.uid)return {...pl,resources:{...pl.resources,[card.res]:myVal}};
+        return pl;
+      });
+      log=`${card.ic} ${players[idx].name} สลับ${RES[card.res].n}กับ ${t.name}!`;
+    }
+  }
+  return {players,log};
+}
+
+async function drawCard(){
+  const card=pickCard();
+  let {players,log}=applyCard(room.players,uid,card);
+  players=players.map(p=>p.uid===uid?{...p,farmed:true}:p);
   const allDone=players.every(p=>p.farmed);
-  const patch={players};
+  const patch={players,log:[log,...(room.log||[])].slice(0,6)};
   if(allDone){patch.roundPhase='auction';patch.auctionIndex=0;patch.auctionOrder=players.map(p=>p.uid);patch.auctionPos=0;patch.bids={};patch.auctionResult=null;}
   await upd(patch);
 }
@@ -230,12 +276,19 @@ async function doBid(amount){
     let bestUid=null,best=-1;
     Object.entries(bids).forEach(([u,a])=>{if(a>best){best=a;bestUid=u}});
     let players=room.players;
+    let logMsg='';
     if(bestUid && best>0){
       const card=CARDS[room.auctionIndex];
-      players=players.map(p=>p.uid===bestUid?{...p,resources:{...p.resources,gold:p.resources.gold-best},score:p.score+card.pts,cardsWon:[...p.cardsWon,card.n]}:p);
+      const iid='c'+Date.now()+Math.floor(Math.random()*999);
+      players=players.map(p=>p.uid===bestUid?{...p,resources:{...p.resources,gold:p.resources.gold-best},cardsWon:[...p.cardsWon,{iid,ci:room.auctionIndex}]}:p);
+      const w=players.find(p=>p.uid===bestUid);
+      logMsg=`🔨 ${w.name} ประมูล "${card.n}" ได้ในราคา ${best}💰`;
+    }else{
+      logMsg='❌ ไม่มีใครสู้ราคาการ์ดใบนี้';
     }
     patch.players=players;
     patch.auctionResult={winnerUid:(best>0?bestUid:null),amount:best};
+    patch.log=[logMsg,...(room.log||[])].slice(0,6);
   }
   await upd(patch);
 }
@@ -249,18 +302,21 @@ async function nextAuctionOrBuild(){
   }
 }
 
-async function doBuild(key){
-  const b=BUILD[key], p=me();
-  const idx=p.grid.findIndex(c=>c===null);
-  if(idx===-1)return;
-  const r=p.resources;
-  if(r.wood<b.cost.wood||r.brick<b.cost.brick||r.energy<b.cost.energy||r.gold<b.cost.gold)return;
-  const players=room.players.map(pl=>{
-    if(pl.uid!==uid)return pl;
-    const grid=[...pl.grid]; grid[idx]=key;
-    return {...pl,grid,score:pl.score+b.pts,resources:{wood:r.wood-b.cost.wood,brick:r.brick-b.cost.brick,energy:r.energy-b.cost.energy,gold:r.gold-b.cost.gold}};
-  });
-  await upd({players});
+function selectCard(iid){ selIid=(selIid===iid?null:iid); render(); }
+
+async function placeOnBoard(cellIdx){
+  const p=me();
+  if(!selIid||room.board[cellIdx])return;
+  const inv=p.cardsWon.find(c=>c.iid===selIid);
+  if(!inv)return;
+  const card=CARDS[inv.ci], r=p.resources;
+  if(r.wood<card.cost.wood||r.brick<card.cost.brick||r.energy<card.cost.energy||r.gold<card.cost.gold)return;
+  const board=[...room.board];
+  board[cellIdx]={ic:card.ic,owner:p.name};
+  const players=room.players.map(pl=>pl.uid!==uid?pl:{...pl,score:pl.score+card.pts,cardsWon:pl.cardsWon.filter(c=>c.iid!==selIid),
+    resources:{wood:r.wood-card.cost.wood,brick:r.brick-card.cost.brick,energy:r.energy-card.cost.energy,gold:r.gold-card.cost.gold}});
+  selIid=null;
+  await upd({board,players,log:[`🏗️ ${p.name} สร้าง "${card.n}"!`,...(room.log||[])].slice(0,6)});
 }
 
 async function doReadyBuild(){
@@ -343,7 +399,7 @@ function seatsBar(){
   const phase=room.roundPhase;
   return `<div class="seats">${room.players.map((p,i)=>{
     let badge='';
-    if(phase==='farm')badge=p.farmed?'<div class="badge">พร้อม</div>':'<div class="badge wait">กำลังฟาร์ม</div>';
+    if(phase==='farm')badge=p.farmed?'<div class="badge">พร้อม</div>':'<div class="badge wait">กำลังจั่วการ์ด</div>';
     if(phase==='auction'){
       const bidderUid=room.auctionOrder[room.auctionPos];
       if(room.bids[p.uid]!==undefined)badge=`<div class="badge">💰${room.bids[p.uid]}</div>`;
@@ -361,7 +417,7 @@ function seatsBar(){
 function gameView(){
   const p=me();
   if(!p)return `<div class="card center">คุณไม่ได้อยู่ในห้องนี้แล้ว</div>`;
-  const phaseLabel={farm:'🌾 ช่วงฟาร์ม',auction:'🔨 ช่วงประมูล',build:'🏗️ ช่วงก่อสร้าง'}[room.roundPhase];
+  const phaseLabel={farm:'🎴 ช่วงจั่วการ์ด',auction:'🔨 ช่วงประมูล',build:'🏗️ ช่วงก่อสร้าง'}[room.roundPhase];
   return `
   <div class="topbar">
     <div class="code-chip">${room.code}</div>
@@ -369,6 +425,7 @@ function gameView(){
     <button class="btn btn-ghost" style="padding:8px 14px;font-size:12px" onclick="leave()">ออก</button>
   </div>
   ${seatsBar()}
+  ${room.log&&room.log.length?`<div class="card" style="margin-top:10px;padding:10px 14px"><div class="sub" style="margin-bottom:6px">📜 เหตุการณ์ล่าสุด</div>${room.log.map(l=>`<div style="font-size:12.5px;margin:3px 0">${esc(l)}</div>`).join('')}</div>`:''}
   <div class="res">
     <span>🪵 <b>${p.resources.wood}</b></span>
     <span>🧱 <b>${p.resources.brick}</b></span>
@@ -383,12 +440,15 @@ function phaseBody(p){
   if(room.roundPhase==='farm'){
     if(p.farmed){
       const doneCount=room.players.filter(x=>x.farmed).length;
-      return `<div class="center"><div style="font-size:44px">✅</div><h3>ฟาร์มเรียบร้อย!</h3>
+      const lc=p.lastCard;
+      return `<div class="center">
+        ${lc?`<div class="auction-card" style="max-width:240px;margin:0 auto"><div class="ic">${lc.ic}</div><div class="nm">${esc(lc.n)}</div></div>`:''}
+        <h3 style="margin-top:14px">🎴 จั่วการ์ดแล้ว!</h3>
         <div class="sub" style="margin-top:6px">รอเพื่อนอีก ${room.players.length-doneCount} คน... (${doneCount}/${room.players.length})</div></div>`;
     }
-    return `<div class="center"><div style="font-size:56px">🌾</div><h3>ช่วงเวลาฟาร์มทรัพยากร</h3>
-      <div class="sub" style="margin:8px 0 18px">กดปุ่มเพื่อสุ่มรับไม้ อิฐ ไฟฟ้า และเงินทุน</div>
-      <button class="btn btn-green" onclick="doFarm()">🪓 ฟาร์มวัตถุดิบ</button></div>`;
+    return `<div class="center"><div style="font-size:56px">🎴</div><h3>ช่วงจั่วการ์ดโชคชะตา</h3>
+      <div class="sub" style="margin:8px 0 18px">ส่วนใหญ่ได้ทรัพยากรฟรี แต่ก็มีการ์ดกวนใจที่อาจโดนขโมยของหรือเสียของแบบไม่ทันตั้งตัว!</div>
+      <button class="btn btn-green" onclick="drawCard()">🎴 จั่วการ์ด</button></div>`;
   }
   if(room.roundPhase==='auction'){
     const card=CARDS[room.auctionIndex];
@@ -403,7 +463,8 @@ function phaseBody(p){
     }
     return `<div class="auction-card">
         <div class="ic">${card.ic}</div><div class="nm">${card.n}</div>
-        <div class="desc">${card.d} • ราคาเริ่มต้น ${card.min} 💰</div>
+        <div class="desc">${card.d} • ให้ ⭐${card.pts} แต้ม • ราคาเริ่มต้น ${card.min} 💰</div>
+        <div class="desc" style="margin-top:-8px">🛠️ ตอนสร้างต้องใช้ 🪵${card.cost.wood} 🧱${card.cost.brick} ⚡${card.cost.energy} 💰${card.cost.gold}</div>
       </div>
       <div class="turnhint center" style="margin-top:12px">การ์ดใบที่ ${room.auctionIndex+1}/${CARDS.length} — ${myTurn?'ตาคุณสู้ราคา!':`รอ ${esc(room.players.find(x=>x.uid===bidderUid)?.name||'')} ตัดสินใจ...`}</div>
       <div class="pillrow">
@@ -414,27 +475,34 @@ function phaseBody(p){
   if(room.roundPhase==='build'){
     if(p.built){
       const doneCount=room.players.filter(x=>x.built).length;
-      return `<div class="center"><div style="font-size:44px">✅</div><h3>สร้างเสร็จแล้ว!</h3>
+      return `<div class="center"><div style="font-size:44px">✅</div><h3>พร้อมแล้ว!</h3>
         <div class="sub" style="margin-top:6px">รอเพื่อนอีก ${room.players.length-doneCount} คน... (${doneCount}/${room.players.length})</div></div>`;
     }
+    const pending=p.cardsWon;
     return `
-    <h3 class="sub" style="color:var(--txt)">🏗️ กระดานเมืองของคุณ</h3>
-    <div class="grid5">${p.grid.map(c=>c?`<div class="cell"><div class="ic">${BUILD[c].ic}</div>${BUILD[c].n}</div>`:`<div class="cell empty">ว่าง</div>`).join('')}</div>
+    <h3 class="sub" style="color:var(--txt)">🏙️ เมืองรวมของทุกคน</h3>
+    <div class="sub" style="margin-bottom:8px">เลือกการ์ดของคุณด้านล่าง แล้วแตะช่องว่างบนกระดานเพื่อสร้าง — ทุกคนเห็นตึกทุกหลังพร้อมกัน</div>
+    <div class="grid5" style="grid-template-columns:repeat(6,1fr)">${room.board.map((c,i)=>c?
+      `<div class="cell"><div class="ic">${c.ic}</div><div style="font-size:8px">${esc(c.owner)}</div></div>`
+      :`<div class="cell empty" style="cursor:pointer" onclick="placeOnBoard(${i})">${selIid?'➕':''}</div>`
+    ).join('')}</div>
+    <div class="sub" style="margin:12px 0 6px">🎴 การ์ดที่คุณประมูลได้ (ยังไม่ได้สร้าง)</div>
     <div class="row" style="gap:8px">
-      ${Object.entries(BUILD).map(([k,b])=>{
-        const ok=p.resources.wood>=b.cost.wood&&p.resources.brick>=b.cost.brick&&p.resources.energy>=b.cost.energy&&p.resources.gold>=b.cost.gold&&p.grid.includes(null);
-        return `<button class="bcard" style="flex:1;min-width:140px" ${ok?'':'disabled'} onclick="doBuild('${k}')">
-          <div class="nm">${b.ic} ${b.n}</div>
-          <div class="cost">🪵${b.cost.wood} 🧱${b.cost.brick} ⚡${b.cost.energy} 💰${b.cost.gold} → ⭐${b.pts}</div>
+      ${pending.length?pending.map(inv=>{
+        const card=CARDS[inv.ci], r=p.resources;
+        const ok=r.wood>=card.cost.wood&&r.brick>=card.cost.brick&&r.energy>=card.cost.energy&&r.gold>=card.cost.gold;
+        return `<button class="bcard" style="flex:1;min-width:140px;${selIid===inv.iid?'outline:2px solid var(--gold)':''}" ${ok?'':'disabled'} onclick="selectCard('${inv.iid}')">
+          <div class="nm">${card.ic} ${card.n}</div>
+          <div class="cost">🪵${card.cost.wood} 🧱${card.cost.brick} ⚡${card.cost.energy} 💰${card.cost.gold} → ⭐${card.pts}</div>
         </button>`;
-      }).join('')}
+      }).join(''):`<div class="sub">ยังไม่มีการ์ด — ต้องประมูลให้ได้ก่อนถึงจะสร้างได้!</div>`}
     </div>
     <div class="center" style="margin-top:16px"><button class="btn btn-green" onclick="doReadyBuild()">✅ จบตาก่อสร้างของฉัน</button></div>`;
   }
   return '';
 }
 
-Object.assign(window,{createRoom,joinRoom,startGame,doFarm,doBid,nextAuctionOrBuild,doBuild,doReadyBuild,leave,setJoinMode,setMaxP});
+Object.assign(window,{createRoom,joinRoom,startGame,drawCard,doBid,nextAuctionOrBuild,selectCard,placeOnBoard,doReadyBuild,leave,setJoinMode,setMaxP});
 
 (async function init(){
   uid=localStorage.getItem('ctp_uid');
