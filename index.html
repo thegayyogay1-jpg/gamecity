@@ -383,6 +383,10 @@ function render(){
  if(!room)app.innerHTML=homeView();else if(!room.started)app.innerHTML=lobbyView();else app.innerHTML=gameView();
 }
 function selectBuilding(i){selectedBuilding=selectedBuilding===String(i)?null:String(i);render()}
+function setJoinMode(mode) {
+  joinMode = mode;
+  render();
+}
 
 /* ===================== GLOBALS ===================== */
 Object.assign(window,{createRoom,joinRoom,startGame,leave,setJoinMode,drawFive,bankSell,sendOffer,answerOffer,finishTrade,submitBid,nextAuction,buildSelected,playResource,playObstacle,endTurn,openObstacle,closeModal,selectBuilding});
