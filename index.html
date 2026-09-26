@@ -108,7 +108,32 @@ label.lbl{font-size:12.5px;color:var(--muted);margin-bottom:4px;display:block}
 </head>
 <body>
 <div class="wrap" id="app"><div class="center" style="padding-top:60px">⏳ กำลังเชื่อมต่อ...</div></div>
-<script>
+<script type="module">
+// ===================== ตั้งค่า Firebase ของคุณตรงนี้ =====================
+// 1) ไปที่ https://console.firebase.google.com -> สร้างโปรเจกต์ใหม่ (ฟรี)
+// 2) เมนูซ้าย Build > Firestore Database > Create database -> เลือก "Start in test mode"
+// 3) หน้า Project settings (รูปเฟือง) -> เลื่อนลง "Your apps" -> เลือก Web (</>) -> ตั้งชื่อ -> Register app
+// 4) คัดลอกค่า firebaseConfig ที่ได้มาใส่แทนของด้านล่างนี้ทั้งหมด
+const firebaseConfig = {
+  apiKey: "AIzaSyB2xWjr4nxGHQX6MUoxs2q9X8U3JjRnKB8",
+  authDomain: "city-tycoon-game-a4928.firebaseapp.com",
+  projectId: "city-tycoon-game-a4928",
+  storageBucket: "city-tycoon-game-a4928.firebasestorage.app",
+  messagingSenderId: "365487358268",
+  appId: "1:365487358268:web:03a38434443c5678191e39",
+  measurementId: "G-F1PST9HDKC"
+};
+// ==========================================================================
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot }
+  from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
+let fdb=null;
+if(firebaseConfig.apiKey!=='YOUR_API_KEY'){
+  const fapp=initializeApp(firebaseConfig);
+  fdb=getFirestore(fapp);
+}
+
 const RES={wood:{n:'ไม้',i:'🪵'},brick:{n:'อิฐ',i:'🧱'},energy:{n:'ไฟฟ้า',i:'⚡'},gold:{n:'เงิน',i:'💰'}};
 const BUILD={
   house:{n:'บ้านเล็ก',cost:{wood:2,brick:1,energy:0,gold:5},pts:10,ic:'🏠'},
@@ -121,41 +146,40 @@ const CARDS=[
   {n:'ท่าเรือการค้า',d:'ให้คะแนน 35 แต้ม',min:10,pts:35,ic:'🚢'}
 ];
 const AVATARS=['🧑‍🚀','🧑‍🎤','🧑‍🌾','🧑‍🔧','🧑‍🎨','🧑‍🚒'];
-let db=null,user=null,uid=null;
+let uid=null;
 let room=null, code=null, unsub=null, joinMode=null, newMaxP=4, err='';
 
 function esc(s){return (s||'').replace(/[<>&"]/g,c=>({ '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 function genCode(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<4;i++)s+=c[Math.floor(Math.random()*c.length)];return s}
 function myIdx(){return room?room.players.findIndex(p=>p.uid===uid):-1}
 function me(){const i=myIdx();return i<0?null:room.players[i]}
-
-async function ref(){return db.doc('rooms/'+code)}
+function roomRef(c){return doc(fdb,'rooms',c)}
 
 async function createRoom(name){
   err='';
-  if(!db){err='โหมดออนไลน์ใช้ไม่ได้ตอนนี้';render();return}
+  if(!fdb){err='ยังไม่ได้ตั้งค่า Firebase (ดูคอมเมนต์ด้านบนของโค้ด)';render();return}
   const c=genCode();
   const p={uid,name:name||'ผู้เล่น',resources:{wood:5,brick:5,energy:3,gold:30},grid:Array(25).fill(null),score:0,cardsWon:[],farmed:false,built:false};
   const data={code:c,hostUid:uid,maxPlayers:newMaxP,started:false,round:1,roundPhase:'lobby',
     players:[p],auctionIndex:0,auctionOrder:[],auctionPos:0,bids:{},auctionResult:null};
-  await db.doc('rooms/'+c).set(data);
+  await setDoc(roomRef(c),data);
   code=c; localStorage.setItem('ctp_code',c); localStorage.setItem('ctp_name',name||'');
   subscribe();
 }
 
 async function joinRoom(c,name){
   err='';
-  if(!db){err='โหมดออนไลน์ใช้ไม่ได้ตอนนี้';render();return}
+  if(!fdb){err='ยังไม่ได้ตั้งค่า Firebase (ดูคอมเมนต์ด้านบนของโค้ด)';render();return}
   c=(c||'').toUpperCase().trim();
-  const d=await db.doc('rooms/'+c).get();
-  if(!d.exists){err='ไม่พบห้องนี้';render();return}
+  const d=await getDoc(roomRef(c));
+  if(!d.exists()){err='ไม่พบห้องนี้';render();return}
   const data=d.data();
   const exist=data.players.find(p=>p.uid===uid);
   if(!exist){
     if(data.started){err='เกมเริ่มไปแล้ว เข้าร่วมไม่ได้';render();return}
     if(data.players.length>=data.maxPlayers){err='ห้องเต็มแล้ว';render();return}
     data.players.push({uid,name:name||'ผู้เล่น',resources:{wood:5,brick:5,energy:3,gold:30},grid:Array(25).fill(null),score:0,cardsWon:[],farmed:false,built:false});
-    await db.doc('rooms/'+c).update({players:data.players});
+    await updateDoc(roomRef(c),{players:data.players});
   }
   code=c; localStorage.setItem('ctp_code',c); localStorage.setItem('ctp_name',name||'');
   subscribe();
@@ -163,15 +187,17 @@ async function joinRoom(c,name){
 
 function subscribe(){
   if(unsub)unsub();
-  unsub=db.doc('rooms/'+code).onSnapshot(snap=>{
-    if(!snap.exists){room=null;err='ห้องถูกปิดไปแล้ว';code=null;localStorage.removeItem('ctp_code');render();return}
+  unsub=onSnapshot(roomRef(code),snap=>{
+    if(!snap.exists()){room=null;err='ห้องถูกปิดไปแล้ว';code=null;localStorage.removeItem('ctp_code');render();return}
     room=snap.data(); render();
-  },e=>{err='เชื่อมต่อขัดข้อง: '+e.code;render()});
+  },e=>{err='เชื่อมต่อขัดข้อง: '+e.message;render()});
 }
 
 function leave(){ if(unsub)unsub(); unsub=null; room=null; code=null; localStorage.removeItem('ctp_code'); render(); }
+function setJoinMode(m){ joinMode=m; render(); }
+function setMaxP(n){ newMaxP=n; render(); }
 
-async function upd(patch){ await db.doc('rooms/'+code).update(patch); }
+async function upd(patch){ await updateDoc(roomRef(code),patch); }
 
 async function startGame(){
   if(room.players.length<2)return;
@@ -263,15 +289,15 @@ function homeView(){
     <div class="sub">ชวนเพื่อนมาแข่งสร้างเมือง ประมูลตึก แข่งคะแนนกันสด ๆ</div>
     ${err?`<div class="err" style="margin-top:14px">${esc(err)}</div>`:''}
     <div class="row center-x" style="margin-top:20px">
-      <button class="btn btn-gold" onclick="joinMode='create';render()">🚀 สร้างห้องใหม่</button>
-      <button class="btn btn-ghost" onclick="joinMode='join';render()">🔑 เข้าร่วมห้อง</button>
+      <button class="btn btn-gold" onclick="setJoinMode('create')">🚀 สร้างห้องใหม่</button>
+      <button class="btn btn-ghost" onclick="setJoinMode('join')">🔑 เข้าร่วมห้อง</button>
     </div>
     ${joinMode==='create'?`
       <div style="margin-top:22px;text-align:left">
         <label class="lbl">ชื่อของคุณ</label>
         <input id="nmIn" placeholder="เช่น อาร์ม" value="${esc(savedName)}">
         <label class="lbl" style="margin-top:12px">จำนวนผู้เล่นสูงสุด</label>
-        <div class="seg">${[2,3,4,5,6].map(n=>`<button class="${n===newMaxP?'on':''}" onclick="newMaxP=${n};render()">${n}</button>`).join('')}</div>
+        <div class="seg">${[2,3,4,5,6].map(n=>`<button class="${n===newMaxP?'on':''}" onclick="setMaxP(${n})">${n}</button>`).join('')}</div>
         <button class="btn btn-green" style="width:100%;margin-top:14px" onclick="createRoom(document.getElementById('nmIn').value)">✅ สร้างห้อง</button>
       </div>`:''}
     ${joinMode==='join'?`
@@ -408,19 +434,17 @@ function phaseBody(p){
   return '';
 }
 
+Object.assign(window,{createRoom,joinRoom,startGame,doFarm,doBid,nextAuctionOrBuild,doBuild,doReadyBuild,leave,setJoinMode,setMaxP});
+
 (async function init(){
-  try{
-    db=await window.claude.use('db');
-    user=await window.claude.use('user');
-    uid=user?await user.id():null;
-    if(!uid) uid='guest-'+Math.random().toString(36).slice(2,10);
-  }catch(e){}
-  if(!db){ err='โหมดออนไลน์ใช้ไม่ได้ในหน้าต่างนี้'; render(); return; }
+  uid=localStorage.getItem('ctp_uid');
+  if(!uid){ uid='guest-'+Math.random().toString(36).slice(2,10); localStorage.setItem('ctp_uid',uid); }
+  if(!fdb){ err='ยังไม่ได้ตั้งค่า Firebase — เปิดไฟล์นี้ด้วยโปรแกรมแก้ไขข้อความแล้วกรอก firebaseConfig ตามคอมเมนต์ด้านบนของโค้ด'; render(); return; }
   const savedCode=localStorage.getItem('ctp_code');
   if(savedCode){
     try{
-      const d=await db.doc('rooms/'+savedCode).get();
-      if(d.exists && d.data().players.some(p=>p.uid===uid)){ code=savedCode; subscribe(); return; }
+      const d=await getDoc(roomRef(savedCode));
+      if(d.exists() && d.data().players.some(p=>p.uid===uid)){ code=savedCode; subscribe(); return; }
     }catch(e){}
     localStorage.removeItem('ctp_code');
   }
