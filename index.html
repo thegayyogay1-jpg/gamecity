@@ -355,7 +355,7 @@ function playView(p){
  <div class="board">${room.board.map(c=>c?`<div class="tile"><div class="icon">${c.ic}</div><small>${esc(c.owner)}</small></div>`:`<div class="tile"><small>ที่ดินว่าง</small></div>`).join("")}</div>
  <h4 style="margin:14px 0 7px">🏗️ สิ่งปลูกสร้างที่ประมูลได้</h4>
  <div class="inventory">${mine.map((inv,i)=>{const b=BUILDINGS[inv.buildingIndex],ok=canAfford(p.resources,b.cost);return `<div class="building ${selectedBuilding===String(i)?"selected":""}" onclick="${myTurn&&ok?`selectBuilding('${i}')`:""}"><h4>${b.ic} ${b.n}</h4><small>ใช้ 🪵${b.cost.wood} 🧱${b.cost.brick} ⚡${b.cost.energy} 💰${b.cost.gold} → ⭐${b.pts}</small></div>`}).join("")||`<div class="notice">คุณยังไม่มีสิ่งปลูกสร้างจากการประมูล</div>`}</div>
- ${myTurn?`<div class="row" style="margin-top:10px"><button class="btn green" onclick="buildSelected()" ${selectedBuilding===null||!canBuild.length?"disabled":""}>🏗️ สร้างตึกที่เลือก</button></div>`:""}
+ ${myTurn?`<div class="row" style="margin-top:10px"><button class="btn green" onclick="buildSelected()" ${selectedBuilding===null||!canAfford(p.resources,BUILDINGS[p.buildings[Number(selectedBuilding)].buildingIndex].cost)?"disabled":""}>🏗️ สร้างตึกที่เลือก</button></div>`:""}
  <h4 style="margin:15px 0 7px">🃏 การ์ดขัดขวาง</h4>${handView(p)}
  ${myTurn?`<div class="notice" style="margin-top:10px">แตะการ์ดขัดขวางเพื่อเลือกเป้าหมาย แล้วใช้ได้ในตาคุณ</div><div class="center" style="margin-top:12px"><button class="btn gold" onclick="endTurn()">✓ จบตาของฉัน</button></div>`:""}`;
 }
