@@ -57,8 +57,8 @@ border-radius:14px;padding:10px;position:relative;box-shadow:0 7px 14px #0006;bo
 .hidden-status{font-size:12px;color:var(--muted);text-align:center;margin-top:8px}
 .reveal{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:7px;margin-top:12px}
 .bidresult{border:1px solid var(--line);background:#0005;border-radius:12px;padding:9px;text-align:center}.bidresult.win{border-color:var(--gold);background:#6a4a1420}
-.board{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}.tile{aspect-ratio:1;background:linear-gradient(#214c3c,#0e3227);border:1px solid #fff2;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
-.tile .icon{font-size:24px}.tile small{font-size:8px;color:#ddd}
+.board{display:grid;grid-template-columns:repeat(6,1fr);gap:4px}.tile{aspect-ratio:1;background:linear-gradient(#214c3c,#0e3227);border:1px solid #fff2;border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.tile .icon{font-size:15px}.tile small{font-size:6px;color:#ddd}
 .inventory{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}.building{background:#0005;border:1px solid var(--line);border-radius:13px;padding:10px}
 .building.selected{border-color:var(--gold);box-shadow:0 0 0 2px #f5c84b30}.building h4{margin:0;font-size:13px}.building small{color:var(--muted)}
 .trade-list{display:grid;gap:8px}.trade{background:#0005;border:1px solid var(--line);border-radius:12px;padding:10px}
@@ -109,10 +109,10 @@ const DECK=[
  {id:"swap",ic:"🔄",n:"สลับโชคชะตา",type:"obstacle",desc:"สลับเงินกับผู้เล่นที่เลือก"}
 ];
 const AV=["🧑‍🚀","🧑‍🎤","🧑‍🌾","🧑‍🔧","🧑‍🎨","🧑‍🚒"];
-const BOARD_N=36;
+const BOARD_N=24;
 let uid=null,room=null,code=null,unsub=null,joinMode=null,newMaxP=4,err="",selectedCard=null,selectedBuilding=null;
-let winMode="score",winScore=100,winHouse=2,winMid=1,winLarge=1,winGold=50,pendingWin=null;
-const RESALE_CAP=3,BANK_REFUND=0.5;
+let winMode="score",winScore=100,winHouse=2,winMid=1,winLarge=1,winGold=50,pendingWin=null,winPopupSeen=false;
+const RESALE_MULT=1.5;
 
 /* ===================== HELPERS ===================== */
 const esc=s=>(s??"").toString().replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"}[c]));
@@ -123,20 +123,20 @@ const canAfford=(r,c)=>Object.entries(c).every(([k,v])=>(r[k]||0)>=v);
 const logAdd=(msg)=>[msg,...(room?.log||[])].slice(0,10);
 function playerName(u){return room.players.find(p=>p.uid===u)?.name||"ผู้เล่น"}
 async function patch(x){await updateDoc(roomRef(),x)}
-function phaseLabel(){return {draw:"🃏 จั่วการ์ด",trade:"🤝 ซื้อขายทรัพยากร",auction:"🔨 ประมูลลับ",play:"🏗️ สร้าง / เล่นการ์ด"}[room.roundPhase]||""}
+function phaseLabel(){return {draw:"🃏 จั่วการ์ด",trade:"🤝 ซื้อขายทรัพยากร",resale:"🏷️ ประมูลทรัพย์สิน",auction:"🔨 ประมูลอาคาร",play:"🏗️ สร้าง / เล่นการ์ด"}[room.roundPhase]||""}
 
 /* ===================== ROOM ===================== */
 function genCode(){const c="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";return Array.from({length:4},()=>c[Math.floor(Math.random()*c.length)]).join("")}
 function blankPlayer(name){
  return {uid,name:name||"ผู้เล่น",resources:{wood:5,brick:5,energy:3,gold:30},score:0,
- cards:[],buildings:[],drawDone:false,tradeDone:false,playDone:false};
+ cards:[],buildings:[],drawDone:false,tradeDone:false,resaleDone:false,playDone:false};
 }
 async function createRoom(name){
  err="";if(!db){err="ยังไม่ได้ตั้งค่า Firebase";render();return}
  const c=genCode(),p=blankPlayer(name);
  const data={code:c,hostUid:uid,maxPlayers:newMaxP,started:false,round:1,roundPhase:"draw",
  players:[p],board:Array(BOARD_N).fill(null),log:[],auction:{buildingIndex:0,bids:{},revealed:false,result:null},
- offers:[],turnUid:null,playUsed:false,listings:[],gameOver:false,winnerUid:null,
+ offers:[],listings:[],gameOver:false,winnerUid:null,
  win:pendingWin||{type:"score",target:100}};
  await setDoc(doc(db,"rooms",c),data);code=c;localStorage.setItem("ctp_code",c);localStorage.setItem("ctp_name",name||"");subscribe();
 }
@@ -154,10 +154,10 @@ async function joinRoom(c,name){
 function subscribe(){
  if(unsub)unsub();unsub=onSnapshot(roomRef(),s=>{if(!s.exists()){leave();return}room=s.data();render()},e=>{err="เชื่อมต่อขัดข้อง: "+e.message;render()});
 }
-function leave(){if(unsub)unsub();unsub=null;room=null;code=null;localStorage.removeItem("ctp_code");render()}
+function leave(){if(unsub)unsub();unsub=null;room=null;code=null;winPopupSeen=false;localStorage.removeItem("ctp_code");render()}
 async function startGame(){
  if(room.players.length<2)return;
- const players=room.players.map(p=>({...p,resources:{wood:5,brick:5,energy:3,gold:30},cards:[],buildings:[],drawDone:false,tradeDone:false,playDone:false}));
+ const players=room.players.map(p=>({...p,resources:{wood:5,brick:5,energy:3,gold:30},cards:[],buildings:[],drawDone:false,tradeDone:false,resaleDone:false,playDone:false}));
  await patch({started:true,round:1,roundPhase:"draw",players,log:["🎬 เริ่มเกม — ทุกคนได้รับทรัพยากรและเงินเท่ากัน"]});
 }
 
@@ -202,7 +202,7 @@ async function answerOffer(id,accept){
 async function finishTrade(){
  const p=me();if(room.roundPhase!=="trade"||p.tradeDone)return;
  const players=room.players.map(x=>x.uid===uid?{...x,tradeDone:true}:x),all=players.every(x=>x.tradeDone);
- await patch({players,roundPhase:all?"auction":"trade",auction:all?{buildingIndex:0,bids:{},revealed:false,result:null}:room.auction});
+ await patch({players,roundPhase:all?"resale":"trade"});
 }
 
 /* ===================== BLIND AUCTION ===================== */
@@ -227,14 +227,13 @@ async function nextAuction(){
  if(!room.auction?.revealed)return;
  const next=(room.auction.buildingIndex||0)+1;
  if(next>=BUILDINGS.length){
-   const first=room.players[0]?.uid;
-   await patch({roundPhase:"play",turnUid:first,playUsed:false,players:room.players.map(p=>({...p,playDone:false}))});
+   await patch({roundPhase:"play",players:room.players.map(p=>({...p,playDone:false}))});
  }else await patch({auction:{buildingIndex:next,bids:{},revealed:false,result:null}});
 }
 
 /* ===================== PLAY / BUILD ===================== */
 async function buildSelected(){
- const p=me();if(room.roundPhase!=="play"||room.turnUid!==uid||!selectedBuilding)return;
+ const p=me();if(room.roundPhase!=="play"||p.playDone||!selectedBuilding)return;
  const inv=p.buildings?.[selectedBuilding];if(!inv)return;
  const b=BUILDINGS[inv.buildingIndex];if(!canAfford(p.resources,b.cost))return;
  const empty=room.board.findIndex(x=>!x);if(empty<0)return;
@@ -242,6 +241,11 @@ async function buildSelected(){
  const players=room.players.map(x=>x.uid===uid?{...x,resources:Object.fromEntries(Object.keys(x.resources).map(k=>[k,x.resources[k]-b.cost[k]])),score:x.score+b.pts,buildings:x.buildings.filter((_,i)=>i!==Number(selectedBuilding))}:x);
  selectedBuilding=null;await patch({board,players,log:logAdd(`🏗️ ${p.name} สร้าง "${b.n}" +${b.pts}⭐`)});
  checkWin(players,board);
+}
+function buybackValue(cost){
+ if(!cost)return 0;
+ const resVal=(cost.wood||0)*RES.wood.sell+(cost.brick||0)*RES.brick.sell+(cost.energy||0)*RES.energy.sell;
+ return Math.round((cost.gold||0)+0.5*resVal);
 }
 function checkWin(players,board){
  const win=room.win||{type:"score",target:100};let winner=null;
@@ -254,56 +258,64 @@ function checkWin(players,board){
  }
  if(winner)patch({gameOver:true,winnerUid:winner});
 }
-/* ===================== RESELL BUILDINGS ===================== */
+/* ===================== RESALE: SECONDHAND PROPERTY AUCTION ===================== */
 async function sellToBank(idx){
- const p=me();const t=room.board[idx];if(!t||t.ownerUid!==uid)return;
- const refund=Math.round((t.cost?.gold||0)*BANK_REFUND);
+ const p=me();if(room.roundPhase!=="resale"||p.resaleDone)return;
+ const t=room.board[idx];if(!t||t.ownerUid!==uid)return;
+ if((room.listings||[]).some(l=>l.tile===idx&&!l.closed))return;
+ const refund=buybackValue(t.cost);
  const board=[...room.board];board[idx]=null;
  const players=room.players.map(x=>x.uid===uid?{...x,resources:{...x.resources,gold:x.resources.gold+refund},score:x.score-(t.pts||0)}:x);
- await patch({board,players,log:logAdd(`💰 ${p.name} ขาย "${t.n}" คืนธนาคาร ได้ ${refund}💰`)});
+ await patch({board,players,log:logAdd(`💰 ${p.name} ขาย "${t.n}" คืนเกม ได้ ${refund}💰`)});
 }
 async function listBuilding(idx){
- const p=me();const t=room.board[idx];if(!t||t.ownerUid!==uid)return;
+ const p=me();if(room.roundPhase!=="resale"||p.resaleDone)return;
+ const t=room.board[idx];if(!t||t.ownerUid!==uid)return;
  if((room.listings||[]).some(l=>l.tile===idx&&!l.closed))return;
- const cap=(t.cost?.gold||0)*RESALE_CAP;
- const price=Number(prompt(`ตั้งราคาเปิดประมูล (สูงสุด ${cap}💰 = ${RESALE_CAP} เท่าของต้นทุน)`,cap));
- if(!price||price<=0||price>cap)return;
+ const price=Math.round((t.cost?.gold||0)*RESALE_MULT);
  const listing={id:"l"+Date.now()+Math.random().toString(36).slice(2,6),tile:idx,sellerUid:uid,startPrice:price,bids:{},building:t,closed:false};
- await patch({listings:[...(room.listings||[]),listing],log:logAdd(`🏷️ ${p.name} เปิดประมูล "${t.n}" เริ่มที่ ${price}💰`)});
+ await patch({listings:[...(room.listings||[]),listing],log:logAdd(`🏷️ ${p.name} เปิดประมูล "${t.n}" ที่ ${price}💰 (1.5 เท่าของราคากลาง)`)});
 }
 async function bidListing(id,amount){
  amount=Number(amount);
+ if(room.roundPhase!=="resale")return;
  const fresh=await getDoc(roomRef());if(!fresh.exists())return;const r=fresh.data();
  const listings=r.listings||[],l=listings.find(x=>x.id===id),buyer=r.players.find(x=>x.uid===uid);
  const top=Math.max(0,...Object.values(l?.bids||{}));
  if(!l||l.closed||l.sellerUid===uid||!buyer||amount<l.startPrice||amount<=top||amount>buyer.resources.gold)return;
  await updateDoc(roomRef(),{listings:listings.map(x=>x.id===id?{...x,bids:{...x.bids,[uid]:amount}}:x)});
 }
-async function closeListing(id){
+async function finishResale(){
+ const p=me();if(room.roundPhase!=="resale"||p.resaleDone)return;
+ const players=room.players.map(x=>x.uid===uid?{...x,resaleDone:true}:x);
+ if(!players.every(x=>x.resaleDone)){await patch({players});return}
  const fresh=await getDoc(roomRef());if(!fresh.exists())return;const r=fresh.data();
- const listings=r.listings||[],l=listings.find(x=>x.id===id);
- if(!l||l.closed||l.sellerUid!==uid)return;
- const bids=Object.entries(l.bids||{});
- if(!bids.length){await updateDoc(roomRef(),{listings:listings.map(x=>x.id===id?{...x,closed:true}:x)});return}
- const [winUid,price]=bids.sort((a,b)=>b[1]-a[1])[0],pr=Number(price);
- const sellerName=r.players.find(x=>x.uid===l.sellerUid)?.name,buyerName=r.players.find(x=>x.uid===winUid)?.name;
- const players=r.players.map(x=>{
-   if(x.uid===l.sellerUid)return{...x,resources:{...x.resources,gold:x.resources.gold+pr}};
-   if(x.uid===winUid)return{...x,resources:{...x.resources,gold:x.resources.gold-pr},score:x.score+(l.building.pts||0)};
-   return x;
+ let board=[...r.board],ps=r.players.map(x=>x.uid===uid?{...x,resaleDone:true}:x),log=[...(r.log||[])];
+ (r.listings||[]).filter(l=>!l.closed).forEach(l=>{
+   const bids=Object.entries(l.bids||{});
+   if(bids.length){
+     const [winUid,price]=bids.sort((a,b)=>b[1]-a[1])[0],pr=Number(price);
+     ps=ps.map(x=>{
+       if(x.uid===l.sellerUid)return{...x,resources:{...x.resources,gold:x.resources.gold+pr}};
+       if(x.uid===winUid)return{...x,resources:{...x.resources,gold:x.resources.gold-pr},score:x.score+(l.building.pts||0)};
+       return x;
+     });
+     const bname=ps.find(x=>x.uid===winUid)?.name,sname=ps.find(x=>x.uid===l.sellerUid)?.name;
+     board[l.tile]={...l.building,ownerUid:winUid,owner:bname};
+     log=[`🔨 ${bname} ชนะประมูล "${l.building.n}" จาก ${sname} ที่ ${pr}💰`,...log];
+   }else{
+     const refund=buybackValue(l.building.cost);
+     const sname=ps.find(x=>x.uid===l.sellerUid)?.name;
+     ps=ps.map(x=>x.uid===l.sellerUid?{...x,resources:{...x.resources,gold:x.resources.gold+refund},score:x.score-(l.building.pts||0)}:x);
+     board[l.tile]=null;
+     log=[`🏦 "${l.building.n}" ไม่มีผู้เสนอราคา ขายคืนเกมให้ ${sname} อัตโนมัติ ${refund}💰`,...log];
+   }
  });
- const board=[...r.board];board[l.tile]={...l.building,ownerUid:winUid,owner:buyerName};
- await updateDoc(roomRef(),{players,board,listings:listings.map(x=>x.id===id?{...x,closed:true}:x),log:[`🔨 ${buyerName} ชนะประมูล "${l.building.n}" จาก ${sellerName} ที่ ${pr}💰`,...(r.log||[])].slice(0,10)});
- const win=r.win||{type:"score",target:100};let winner=null;
- for(const pl of players){
-   if(win.type==="score"){if(pl.score>=win.target){winner=pl.uid;break}}
-   else{const cnt={0:0,1:0,2:0};board.forEach(t=>{if(t&&t.ownerUid===pl.uid)cnt[t.buildIndex]=(cnt[t.buildIndex]||0)+1});
-     if(cnt[0]>=win.house&&cnt[1]>=win.mid&&cnt[2]>=win.large&&pl.resources.gold>=win.gold){winner=pl.uid;break}}
- }
- if(winner)await updateDoc(roomRef(),{gameOver:true,winnerUid:winner});
+ await updateDoc(roomRef(),{players:ps,board,listings:[],roundPhase:"auction",auction:{buildingIndex:0,bids:{},revealed:false,result:null},log:log.slice(0,10)});
+ checkWin(ps,board);
 }
 async function playResource(cardId){
- const p=me();if(room.roundPhase!=="play"||room.turnUid!==uid)return;
+ const p=me();if(room.roundPhase!=="play"||p.playDone)return;
  const idx=p.cards.findIndex(c=>c.id===cardId);if(idx<0)return;const card=p.cards[idx];
  
  // อนุญาตให้ใช้การ์ดประเภททรัพยากรหรือเพิ่มของได้ทันทีในตาเล่น
@@ -324,7 +336,7 @@ async function playResource(cardId){
  log:logAdd(`🎁 ${p.name} ใช้การ์ด "${card.n}" สำเร็จ`)});
 }
 async function playObstacle(cardId,targetUid){
- const p=me();if(room.roundPhase!=="play"||room.turnUid!==uid)return;
+ const p=me();if(room.roundPhase!=="play"||p.playDone)return;
  const idx=p.cards.findIndex(c=>c.id===cardId);if(idx<0)return;const card=p.cards[idx];
  if(card.type!=="obstacle"||targetUid===uid)return;
  let ps=room.players.map(x=>({...x,resources:{...x.resources}}));
@@ -354,20 +366,18 @@ function showPopup(msg){
  m.style.display="block";
 }
 async function endTurn(){
- if(room.roundPhase!=="play"||room.turnUid!==uid)return;
- const idx=room.players.findIndex(p=>p.uid===uid),next=room.players[(idx+1)%room.players.length];
- const roundsCompleted=room.players.every(p=>p.playDone||p.uid===uid);
- let players=room.players.map(x=>x.uid===uid?{...x,playDone:true}:x);
- if(roundsCompleted){
-   players=players.map(x=>({...x,drawDone:false,tradeDone:false,playDone:false}));
-   await patch({players,round:room.round+1,roundPhase:"draw",turnUid:null,playUsed:false,auction:{buildingIndex:0,bids:{},revealed:false,result:null}});
- }else await patch({players,turnUid:next.uid,playUsed:false});
+ const p=me();if(room.roundPhase!=="play"||p.playDone)return;
+ const players=room.players.map(x=>x.uid===uid?{...x,playDone:true}:x);
+ if(players.every(x=>x.playDone)){
+   const reset=players.map(x=>({...x,drawDone:false,tradeDone:false,resaleDone:false,playDone:false}));
+   await patch({players:reset,round:room.round+1,roundPhase:"draw",auction:{buildingIndex:0,bids:{},revealed:false,result:null},listings:[]});
+ }else await patch({players});
 }
 
 /* ===================== UI ===================== */
 function phaseBar(){
- const arr=[["draw","🃏 จั่ว"],["trade","🤝 ซื้อขาย"],["auction","🔨 ประมูล"],["play","🏗️ เล่น/สร้าง"]];
- return `<div class="phasebar">${arr.map(x=>`<div class="step ${room.roundPhase===x[0]?"on":""}">${x[1]}</div>`).join("")}</div>`;
+ const arr=[["draw","🃏 จั่ว"],["trade","🤝 ซื้อขาย"],["resale","🏷️ ขายทรัพย์สิน"],["auction","🔨 ประมูลอาคาร"],["play","🏗️ เล่น/สร้าง"]];
+ return `<div class="phasebar" style="grid-template-columns:repeat(5,1fr)">${arr.map(x=>`<div class="step ${room.roundPhase===x[0]?"on":""}">${x[1]}</div>`).join("")}</div>`;
 }
 function playersBar(){
  const phase=room.roundPhase;
@@ -375,15 +385,16 @@ function playersBar(){
    let badge="";
    if(phase==="draw")badge=p.drawDone?`<span class="badge">ครบ</span>`:`<span class="badge wait">ยังไม่จั่ว</span>`;
    if(phase==="trade")badge=p.tradeDone?`<span class="badge">พร้อม</span>`:`<span class="badge wait">ซื้อขาย</span>`;
+   if(phase==="resale")badge=p.resaleDone?`<span class="badge">พร้อม</span>`:`<span class="badge wait">ประมูล</span>`;
    if(phase==="auction")badge=room.auction?.bids?.[p.uid]!==undefined?`<span class="badge">ลงแล้ว</span>`:`<span class="badge wait">ยังไม่ลง</span>`;
-   if(phase==="play"&&room.turnUid===p.uid)badge=`<span class="badge">ตาเล่น</span>`;
-   return `<div class="player ${p.uid===uid?"me":""} ${room.turnUid===p.uid?"active":""}">${badge}<div class="av">${AV[i%AV.length]}</div><div class="pname">${esc(p.name)}</div><div class="mini">⭐${p.score} • 💰${p.resources.gold}</div></div>`;
+   if(phase==="play")badge=p.playDone?`<span class="badge">เล่นแล้ว</span>`:`<span class="badge wait">กำลังเล่น</span>`;
+   return `<div class="player ${p.uid===uid?"me":""}">${badge}<div class="av">${AV[i%AV.length]}</div><div class="pname">${esc(p.name)}</div><div class="mini">⭐${p.score} • 💰${p.resources.gold}</div></div>`;
  }).join("")}</div>`;
 }
 function resources(p){return `<div class="resources">${["wood","brick","energy","gold"].map(k=>`<div class="resbox">${RES[k].i}<b>${p.resources[k]}</b><span class="sub">${RES[k].n}</span></div>`).join("")}<div class="resbox">⭐<b>${p.score}</b><span class="sub">คะแนน</span></div></div>`}
 function handView(p){
  return `<div class="hand">${(p.cards||[]).map(c=>{
-   const clickable=room.roundPhase==="play"&&room.turnUid===uid;
+   const clickable=room.roundPhase==="play"&&!me().playDone;
    const action=clickable?(c.type==="obstacle"?`openObstacle('${c.id}')`:`playResource('${c.id}')`):"";
    return `<div class="playing-card ${c.type==="obstacle"?"obstacle":""}" ${action?`onclick="${action}"`:""}>
    <span class="tag">${c.type==="obstacle"?"ขัดขวาง":"ทรัพยากร"}</span><div class="icon">${c.ic}</div><div class="cn">${esc(c.n)}</div><div class="cd">${esc(c.desc)}</div>${clickable?`<div class="cd" style="margin-top:7px;font-weight:800">${c.type==="obstacle"?"แตะเพื่อเลือกเป้าหมาย":"แตะเพื่อใช้การ์ด"}</div>`:""}</div>`;
@@ -418,30 +429,28 @@ function auctionView(p){
 }
 function playView(p){
  const mine=p.buildings||[];
- const canBuild=mine.filter((inv,i)=>canAfford(p.resources,BUILDINGS[inv.buildingIndex]));
- const myTurn=room.turnUid===uid;
- return `<div class="section-title"><h3>🏗️ สร้างเมือง / เล่นการ์ด</h3><span class="sub">${myTurn?"ตาคุณ":"รอ "+esc(playerName(room.turnUid))}</span></div>
+ const canAct=!p.playDone;
+ return `<div class="section-title"><h3>🏗️ สร้างเมือง / เล่นการ์ด</h3><span class="sub">${canAct?"เล่นได้เลย":"คุณจบตานี้แล้ว รอผู้เล่นคนอื่น"}</span></div>
  <div class="board">${room.board.map(c=>c?`<div class="tile"><div class="icon">${c.ic}</div><small>${esc(c.owner)}</small></div>`:`<div class="tile"><small>ที่ดินว่าง</small></div>`).join("")}</div>
- ${marketView(p)}
  <h4 style="margin:14px 0 7px">🏗️ สิ่งปลูกสร้างที่ประมูลได้</h4>
- <div class="inventory">${mine.map((inv,i)=>{const b=BUILDINGS[inv.buildingIndex],ok=canAfford(p.resources,b.cost);return `<div class="building ${selectedBuilding===String(i)?"selected":""}" onclick="${myTurn&&ok?`selectBuilding('${i}')`:""}"><h4>${b.ic} ${b.n}</h4><small>ใช้ 🪵${b.cost.wood} 🧱${b.cost.brick} ⚡${b.cost.energy} 💰${b.cost.gold} → ⭐${b.pts}</small></div>`}).join("")||`<div class="notice">คุณยังไม่มีสิ่งปลูกสร้างจากการประมูล</div>`}</div>
- ${myTurn?`<div class="row" style="margin-top:10px"><button class="btn green" onclick="buildSelected()" ${selectedBuilding===null||!canAfford(p.resources,BUILDINGS[p.buildings[Number(selectedBuilding)].buildingIndex].cost)?"disabled":""}>🏗️ สร้างตึกที่เลือก</button></div>`:""}
+ <div class="inventory">${mine.map((inv,i)=>{const b=BUILDINGS[inv.buildingIndex],ok=canAfford(p.resources,b.cost);return `<div class="building ${selectedBuilding===String(i)?"selected":""}" onclick="${canAct&&ok?`selectBuilding('${i}')`:""}"><h4>${b.ic} ${b.n}</h4><small>ใช้ 🪵${b.cost.wood} 🧱${b.cost.brick} ⚡${b.cost.energy} 💰${b.cost.gold} → ⭐${b.pts}</small></div>`}).join("")||`<div class="notice">คุณยังไม่มีสิ่งปลูกสร้างจากการประมูล</div>`}</div>
+ ${canAct?`<div class="row" style="margin-top:10px"><button class="btn green" onclick="buildSelected()" ${selectedBuilding===null||!canAfford(p.resources,BUILDINGS[p.buildings[Number(selectedBuilding)].buildingIndex].cost)?"disabled":""}>🏗️ สร้างตึกที่เลือก</button></div>`:""}
  <h4 style="margin:15px 0 7px">🃏 การ์ดขัดขวาง</h4>${handView(p)}
- ${myTurn?`<div class="notice" style="margin-top:10px">แตะการ์ดขัดขวางเพื่อเลือกเป้าหมาย แล้วใช้ได้ในตาคุณ</div><div class="center" style="margin-top:12px"><button class="btn gold" onclick="endTurn()">✓ จบตาของฉัน</button></div>`:""}`;
+ ${canAct?`<div class="notice" style="margin-top:10px">แตะการ์ดขัดขวางเพื่อเลือกเป้าหมาย ใช้ได้เรื่อยๆ จนกว่าจะกดจบตา</div><div class="center" style="margin-top:12px"><button class="btn gold" onclick="endTurn()">✓ จบตาของฉัน</button></div>`:""}`;
 }
-function marketView(p){
+function resaleView(p){
  const mine=room.board.map((t,i)=>({t,i})).filter(x=>x.t&&x.t.ownerUid===uid&&!(room.listings||[]).some(l=>l.tile===x.i&&!l.closed));
  const active=(room.listings||[]).filter(l=>!l.closed);
- if(!mine.length&&!active.length)return"";
- return `<h4 style="margin:14px 0 7px">🏷️ ตลาดอาคารมือสอง</h4>
- ${mine.length?`<div class="inventory">${mine.map(x=>`<div class="building"><h4>${x.t.ic} ${esc(x.t.n)}</h4><small>ต้นทุน 💰${x.t.cost?.gold||0}</small><div class="row" style="margin-top:6px"><button class="btn gold" onclick="sellToBank(${x.i})">ขายคืน ${Math.round(BANK_REFUND*100)}%</button><button class="btn ghost" onclick="listBuilding(${x.i})">เปิดประมูล</button></div></div>`).join("")}</div>`:""}
- ${active.length?`<div class="trade-list" style="margin-top:8px">${active.map(l=>{
+ return `<div class="section-title"><h3>🏷️ ประมูลทรัพย์สินที่สร้างสำเร็จแล้ว</h3><span class="sub">ขายคืนเกม หรือเปิดประมูลให้ผู้เล่นอื่นแข่งราคา</span></div>
+ ${mine.length?`<div class="inventory">${mine.map(x=>`<div class="building"><h4>${x.t.ic} ${esc(x.t.n)}</h4><small>ราคากลาง 💰${x.t.cost?.gold||0} • ขายคืนเกมได้ 💰${buybackValue(x.t.cost)}</small><div class="row" style="margin-top:6px"><button class="btn gold" onclick="sellToBank(${x.i})">ขายคืนเกม</button><button class="btn ghost" onclick="listBuilding(${x.i})">เปิดประมูล ${Math.round((x.t.cost?.gold||0)*RESALE_MULT)}💰</button></div></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีทรัพย์สินที่สร้างสำเร็จให้ขาย</div>`}
+ ${active.length?`<h4 style="margin:14px 0 7px">📋 รายการเปิดประมูล</h4><div class="trade-list">${active.map(l=>{
    const top=Object.keys(l.bids||{}).length?Math.max(...Object.values(l.bids)):null;
    const isMine=l.sellerUid===uid;
    return `<div class="trade"><b>${l.building.ic} ${esc(l.building.n)}</b> — ผู้ขาย ${esc(playerName(l.sellerUid))} • เปิดที่ ${l.startPrice}💰 • สูงสุดตอนนี้ ${top!==null?top+"💰":"ยังไม่มีผู้เสนอ"}
-   ${isMine?`<div class="row" style="margin-top:7px"><button class="btn green" onclick="closeListing('${l.id}')">ปิดประมูล & ขายให้ผู้เสนอสูงสุด</button></div>`
+   ${isMine?`<div class="sub" style="margin-top:6px">รอจนจบรอบนี้ — ถ้าไม่มีผู้เสนอราคาจะขายคืนเกมอัตโนมัติที่ 💰${buybackValue(l.building.cost)}</div>`
    :`<div class="row" style="margin-top:7px"><input type="number" id="bid-${l.id}" placeholder="เสนอราคา"><button class="btn gold" onclick="bidListing('${l.id}',document.getElementById('bid-${l.id}').value)">เสนอราคา</button></div>`}</div>`;
- }).join("")}</div>`:""}`;
+ }).join("")}</div>`:""}
+ <div class="center" style="margin-top:14px"><button class="btn green" onclick="finishResale()" ${p.resaleDone?"disabled":""}>${p.resaleDone?"✓ เสร็จแล้ว":"✓ จบช่วงประมูลทรัพย์สินของฉัน"}</button></div>`;
 }
 function openObstacle(id){
  const c=me().cards.find(x=>x.id===id);if(!c)return;
@@ -453,6 +462,7 @@ function closeModal(){document.getElementById("modal").style.display="none"}
 function phaseBody(p){
  if(room.roundPhase==="draw")return `<div class="center"><div style="font-size:58px">🃏</div><h3>จั่วการ์ด 5 ใบ</h3><div class="sub" style="margin:7px 0 15px">การ์ดทรัพยากรจะเก็บไว้ใช้/สะสม ส่วนการ์ดขัดขวางจะเก็บไว้เล่นในช่วงสร้าง/เล่น</div>${p.drawDone?`<div class="notice">✓ คุณจั่วครบ 5 ใบแล้ว — รอผู้เล่นคนอื่น (${room.players.filter(x=>x.drawDone).length}/${room.players.length})</div>`:`<button class="btn green" onclick="drawFive()">🃏 จั่ว 5 ใบ</button>`}<div style="margin-top:14px">${handView(p)}</div></div>`;
  if(room.roundPhase==="trade")return tradeView(p);
+ if(room.roundPhase==="resale")return resaleView(p);
  if(room.roundPhase==="auction")return auctionView(p);
  if(room.roundPhase==="play")return playView(p);
 }
@@ -474,7 +484,7 @@ function homeView(){
  const n=localStorage.getItem("ctp_name")||"",c=localStorage.getItem("ctp_code")||"";
  return `<div class="lights">${"<i></i>".repeat(9)}</div><div class="card center"><div style="font-size:55px">🏙️</div><div class="title">City Tycoon Party</div><div class="sub">Board Game Edition • สร้างเมือง • ซื้อขาย • ประมูลลับ • ขัดขวาง</div>${err?`<div class="err" style="margin-top:12px">${esc(err)}</div>`:""}
  <div class="row" style="margin-top:20px"><button class="btn gold" onclick="setJoinMode('create')">🚀 สร้างห้อง</button><button class="btn ghost" onclick="setJoinMode('join')">🔑 เข้าร่วมห้อง</button></div>
- ${joinMode==="create"?`<div style="text-align:left;margin-top:16px"><label>ชื่อ</label><input id="nm" value="${esc(n)}" placeholder="ชื่อผู้เล่น"><label>จำนวนผู้เล่น</label><select id="mx">${[2,3,4,5,6].map(x=>`<option ${x===newMaxP?"selected":""}>${x}</option>`).join("")}</select>
+ ${joinMode==="create"?`<div style="text-align:left;margin-top:16px"><label>ชื่อ</label><input id="nm" value="${esc(n)}" placeholder="ชื่อผู้เล่น"><label>จำนวนผู้เล่น</label><select id="mx" onchange="newMaxP=Number(this.value)">${[2,3,4,5,6].map(x=>`<option ${x===newMaxP?"selected":""}>${x}</option>`).join("")}</select>
  <label>เงื่อนไขชนะ</label><select id="wmSel" onchange="setWinMode(this.value)"><option value="score" ${winMode==="score"?"selected":""}>คะแนนถึงเป้าหมาย</option><option value="collect" ${winMode==="collect"?"selected":""}>สะสมอาคารครบ + เงินถึงเป้า</option></select>
  ${winMode==="score"?`<label>คะแนนเป้าหมาย</label><input id="wt" type="number" value="${winScore}">`:
  `<div class="row"><div><label>บ้าน 🏠</label><input id="wh" type="number" value="${winHouse}"></div><div><label>อาคารกลาง 🏬</label><input id="wmi" type="number" value="${winMid}"></div></div><div class="row"><div><label>ตึกใหญ่ 🏙️</label><input id="wl" type="number" value="${winLarge}"></div><div><label>เงิน 💰</label><input id="wg" type="number" value="${winGold}"></div></div>`}
@@ -487,10 +497,19 @@ function lobbyView(){
 }
 function render(){
  const app=document.getElementById("app");
- if(!room)app.innerHTML=homeView();
- else if(room.gameOver)app.innerHTML=endView();
- else if(!room.started)app.innerHTML=lobbyView();
- else app.innerHTML=gameView();
+ if(!room){winPopupSeen=false;app.innerHTML=homeView();return}
+ if(room.gameOver){app.innerHTML=endView();return}
+ if(!room.started){app.innerHTML=lobbyView();return}
+ app.innerHTML=gameView();
+ if(!winPopupSeen){winPopupSeen=true;showWinPopup()}
+}
+function showWinPopup(){
+ const w=room.win||{type:"score",target:100};
+ const msg=w.type==="score"?`ทำคะแนนให้ถึง ⭐${w.target} ก่อนผู้เล่นคนอื่นเพื่อชนะ`
+ :`ต้องมี 🏠 บ้าน ${w.house} หลัง, 🏬 อาคารกลาง ${w.mid} หลัง, 🏙️ ตึกใหญ่ ${w.large} หลัง และ 💰 เงิน ${w.gold} ขึ้นไป เพื่อชนะ`;
+ const m=document.getElementById("modal");
+ m.innerHTML=`<div class="card center" style="max-width:360px;margin:25vh auto"><div style="font-size:40px">🏆</div><h3 style="margin-top:6px">เงื่อนไขการชนะ</h3><p class="sub" style="margin-top:8px">${esc(msg)}</p><button class="btn gold" style="margin-top:14px" onclick="closeModal()">เข้าใจแล้ว</button></div>`;
+ m.style.display="block";
 }
 function setWinMode(v){winMode=v;render()}
 function confirmCreate(name){
@@ -505,7 +524,7 @@ function setJoinMode(mode) {
 }
 
 /* ===================== GLOBALS ===================== */
-Object.assign(window,{createRoom,joinRoom,startGame,leave,setJoinMode,drawFive,bankSell,sendOffer,answerOffer,finishTrade,submitBid,nextAuction,buildSelected,playResource,playObstacle,endTurn,openObstacle,closeModal,selectBuilding,setWinMode,confirmCreate,sellToBank,listBuilding,bidListing,closeListing});
+Object.assign(window,{createRoom,joinRoom,startGame,leave,setJoinMode,drawFive,bankSell,sendOffer,answerOffer,finishTrade,submitBid,nextAuction,buildSelected,playResource,playObstacle,endTurn,openObstacle,closeModal,selectBuilding,setWinMode,confirmCreate,sellToBank,listBuilding,bidListing,finishResale});
 uid=localStorage.getItem("ctp_uid");if(!uid){uid="guest-"+Math.random().toString(36).slice(2,10);localStorage.setItem("ctp_uid",uid)}
 (async()=>{if(!db){err="กรุณาใส่ firebaseConfig ก่อนใช้งาน";render();return}
  const saved=localStorage.getItem("ctp_code");if(saved){try{const d=await getDoc(doc(db,"rooms",saved));if(d.exists()&&d.data().players.some(p=>p.uid===uid)){code=saved;subscribe();return}}catch(e){}}
