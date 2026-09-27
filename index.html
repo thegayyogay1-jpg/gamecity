@@ -259,15 +259,6 @@ function checkWin(players,board){
  if(winner)patch({gameOver:true,winnerUid:winner});
 }
 /* ===================== RESALE: SECONDHAND PROPERTY AUCTION ===================== */
-async function sellToBank(idx){
- const p=me();if(room.roundPhase!=="resale"||p.resaleDone)return;
- const t=room.board[idx];if(!t||t.ownerUid!==uid)return;
- if((room.listings||[]).some(l=>l.tile===idx&&!l.closed))return;
- const refund=buybackValue(t.cost);
- const board=[...room.board];board[idx]=null;
- const players=room.players.map(x=>x.uid===uid?{...x,resources:{...x.resources,gold:x.resources.gold+refund},score:x.score-(t.pts||0)}:x);
- await patch({board,players,log:logAdd(`💰 ${p.name} ขาย "${t.n}" คืนเกม ได้ ${refund}💰`)});
-}
 async function listBuilding(idx){
  const p=me();if(room.roundPhase!=="resale"||p.resaleDone)return;
  const t=room.board[idx];if(!t||t.ownerUid!==uid)return;
@@ -374,6 +365,32 @@ async function endTurn(){
  }else await patch({players});
 }
 
+/* ===================== WIN CONDITION / MY BUILDINGS POPUPS ===================== */
+const PLAYER_COLORS=["#f5c84b","#62b8e8","#e45b52","#4fc58a","#c084fc","#ff9f5a"];
+function colorForUid(u){
+ const i=room.players.findIndex(p=>p.uid===u);
+ return i<0?"#755031":PLAYER_COLORS[i%PLAYER_COLORS.length];
+}
+function showMyPermits(){
+ const p=me();const items=p?.buildings||[];
+ const body=items.length?`<div class="inventory">${items.map(inv=>{const b=BUILDINGS[inv.buildingIndex];return `<div class="building"><h4>${b.ic} ${b.n}</h4><small>ใช้ 🪵${b.cost.wood} 🧱${b.cost.brick} ⚡${b.cost.energy} 💰${b.cost.gold} → ⭐${b.pts}</small></div>`}).join("")}</div>`:`<div class="notice">คุณยังไม่มีการ์ดสิ่งปลูกสร้างที่รอสร้าง — ต้องประมูลให้ได้ก่อน</div>`;
+ const m=document.getElementById("modal");
+ m.innerHTML=`<div class="card" style="max-width:440px;margin:10vh auto"><div class="section-title"><h3>🎫 การ์ดสิ่งปลูกสร้างของฉัน</h3></div><div class="sub" style="margin-bottom:10px">รายการที่ประมูลได้แล้วแต่ยังไม่ได้สร้าง</div>${body}<button class="btn ghost" style="width:100%;margin-top:12px" onclick="closeModal()">ปิด</button></div>`;
+ m.style.display="block";
+}
+function showMyBuildings(){
+ const p=me();
+ const mine=(room.board||[]).map((t,i)=>({t,i})).filter(x=>x.t&&x.t.ownerUid===uid);
+ const counts=[0,0,0];mine.forEach(x=>{if(x.t.buildIndex!==undefined)counts[x.t.buildIndex]=(counts[x.t.buildIndex]||0)+1});
+ const w=room.win||{type:"score",target:100};
+ const progress=w.type==="collect"?`<div class="notice" style="margin-bottom:10px">🎯 เป้าหมาย: 🏠${w.house} 🏬${w.mid} 🏙️${w.large} 💰${w.gold}<br>📊 ตอนนี้คุณมี: 🏠${counts[0]} 🏬${counts[1]} 🏙️${counts[2]} 💰${p.resources.gold}</div>`
+ :`<div class="notice" style="margin-bottom:10px">🎯 เป้าหมาย: ทำคะแนนให้ถึง ⭐${w.target}<br>📊 ตอนนี้คุณมี ⭐${p.score} แต้ม</div>`;
+ const body=mine.length?`<div class="inventory">${mine.map(x=>`<div class="building" style="border-color:${colorForUid(uid)}"><h4>${x.t.ic} ${esc(x.t.n)}</h4><small>⭐${x.t.pts||0} แต้ม</small></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีสิ่งปลูกสร้างที่สร้างสำเร็จ</div>`;
+ const m=document.getElementById("modal");
+ m.innerHTML=`<div class="card" style="max-width:440px;margin:10vh auto"><div class="section-title"><h3>🏙️ สิ่งปลูกสร้างที่สร้างสำเร็จแล้ว</h3></div>${progress}${body}<button class="btn ghost" style="width:100%;margin-top:12px" onclick="closeModal()">ปิด</button></div>`;
+ m.style.display="block";
+}
+
 /* ===================== UI ===================== */
 function phaseBar(){
  const arr=[["draw","🃏 จั่ว"],["trade","🤝 ซื้อขาย"],["resale","🏷️ ขายทรัพย์สิน"],["auction","🔨 ประมูลอาคาร"],["play","🏗️ เล่น/สร้าง"]];
@@ -388,7 +405,7 @@ function playersBar(){
    if(phase==="resale")badge=p.resaleDone?`<span class="badge">พร้อม</span>`:`<span class="badge wait">ประมูล</span>`;
    if(phase==="auction")badge=room.auction?.bids?.[p.uid]!==undefined?`<span class="badge">ลงแล้ว</span>`:`<span class="badge wait">ยังไม่ลง</span>`;
    if(phase==="play")badge=p.playDone?`<span class="badge">เล่นแล้ว</span>`:`<span class="badge wait">กำลังเล่น</span>`;
-   return `<div class="player ${p.uid===uid?"me":""}">${badge}<div class="av">${AV[i%AV.length]}</div><div class="pname">${esc(p.name)}</div><div class="mini">⭐${p.score} • 💰${p.resources.gold}</div></div>`;
+   return `<div class="player ${p.uid===uid?"me":""}" style="border-color:${colorForUid(p.uid)}">${badge}<div class="av">${AV[i%AV.length]}</div><div class="pname">${esc(p.name)}</div><div class="mini">⭐${p.score} • 💰${p.resources.gold}</div></div>`;
  }).join("")}</div>`;
 }
 function resources(p){return `<div class="resources">${["wood","brick","energy","gold"].map(k=>`<div class="resbox">${RES[k].i}<b>${p.resources[k]}</b><span class="sub">${RES[k].n}</span></div>`).join("")}<div class="resbox">⭐<b>${p.score}</b><span class="sub">คะแนน</span></div></div>`}
@@ -431,7 +448,7 @@ function playView(p){
  const mine=p.buildings||[];
  const canAct=!p.playDone;
  return `<div class="section-title"><h3>🏗️ สร้างเมือง / เล่นการ์ด</h3><span class="sub">${canAct?"เล่นได้เลย":"คุณจบตานี้แล้ว รอผู้เล่นคนอื่น"}</span></div>
- <div class="board">${room.board.map(c=>c?`<div class="tile"><div class="icon">${c.ic}</div><small>${esc(c.owner)}</small></div>`:`<div class="tile"><small>ที่ดินว่าง</small></div>`).join("")}</div>
+ <div class="board">${room.board.map(c=>c?`<div class="tile" style="border:2px solid ${colorForUid(c.ownerUid)}"><div class="icon">${c.ic}</div><small>${esc(c.owner)}</small></div>`:`<div class="tile"><small>ที่ดินว่าง</small></div>`).join("")}</div>
  <h4 style="margin:14px 0 7px">🏗️ สิ่งปลูกสร้างที่ประมูลได้</h4>
  <div class="inventory">${mine.map((inv,i)=>{const b=BUILDINGS[inv.buildingIndex],ok=canAfford(p.resources,b.cost);return `<div class="building ${selectedBuilding===String(i)?"selected":""}" onclick="${canAct&&ok?`selectBuilding('${i}')`:""}"><h4>${b.ic} ${b.n}</h4><small>ใช้ 🪵${b.cost.wood} 🧱${b.cost.brick} ⚡${b.cost.energy} 💰${b.cost.gold} → ⭐${b.pts}</small></div>`}).join("")||`<div class="notice">คุณยังไม่มีสิ่งปลูกสร้างจากการประมูล</div>`}</div>
  ${canAct?`<div class="row" style="margin-top:10px"><button class="btn green" onclick="buildSelected()" ${selectedBuilding===null||!canAfford(p.resources,BUILDINGS[p.buildings[Number(selectedBuilding)].buildingIndex].cost)?"disabled":""}>🏗️ สร้างตึกที่เลือก</button></div>`:""}
@@ -441,8 +458,8 @@ function playView(p){
 function resaleView(p){
  const mine=room.board.map((t,i)=>({t,i})).filter(x=>x.t&&x.t.ownerUid===uid&&!(room.listings||[]).some(l=>l.tile===x.i&&!l.closed));
  const active=(room.listings||[]).filter(l=>!l.closed);
- return `<div class="section-title"><h3>🏷️ ประมูลทรัพย์สินที่สร้างสำเร็จแล้ว</h3><span class="sub">ขายคืนเกม หรือเปิดประมูลให้ผู้เล่นอื่นแข่งราคา</span></div>
- ${mine.length?`<div class="inventory">${mine.map(x=>`<div class="building"><h4>${x.t.ic} ${esc(x.t.n)}</h4><small>ราคากลาง 💰${x.t.cost?.gold||0} • ขายคืนเกมได้ 💰${buybackValue(x.t.cost)}</small><div class="row" style="margin-top:6px"><button class="btn gold" onclick="sellToBank(${x.i})">ขายคืนเกม</button><button class="btn ghost" onclick="listBuilding(${x.i})">เปิดประมูล ${Math.round((x.t.cost?.gold||0)*RESALE_MULT)}💰</button></div></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีทรัพย์สินที่สร้างสำเร็จให้ขาย</div>`}
+ return `<div class="section-title"><h3>🏷️ ประมูลทรัพย์สินที่สร้างสำเร็จแล้ว</h3><span class="sub">เปิดประมูลให้ผู้เล่นอื่นแข่งราคา — ถ้าไม่มีใครสนใจจะขายคืนเกมให้อัตโนมัติ</span></div>
+ ${mine.length?`<div class="inventory">${mine.map(x=>`<div class="building" style="border-color:${colorForUid(uid)}"><h4>${x.t.ic} ${esc(x.t.n)}</h4><small>ราคากลาง 💰${x.t.cost?.gold||0}</small><div class="row" style="margin-top:6px"><button class="btn gold" style="width:100%" onclick="listBuilding(${x.i})">🏷️ เปิดประมูล (เริ่มที่ ${Math.round((x.t.cost?.gold||0)*RESALE_MULT)}💰 • ไม่มีคนสนใจ = คืนเกมอัตโนมัติที่ ${buybackValue(x.t.cost)}💰)</button></div></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีทรัพย์สินที่สร้างสำเร็จให้ขาย</div>`}
  ${active.length?`<h4 style="margin:14px 0 7px">📋 รายการเปิดประมูล</h4><div class="trade-list">${active.map(l=>{
    const top=Object.keys(l.bids||{}).length?Math.max(...Object.values(l.bids)):null;
    const isMine=l.sellerUid===uid;
@@ -467,7 +484,8 @@ function phaseBody(p){
  if(room.roundPhase==="play")return playView(p);
 }
 function gameView(){
- const p=me();return `<div class="top"><div class="code">ห้อง ${room.code}</div><div class="phase">รอบ ${room.round} • ${phaseLabel()}</div><button class="btn ghost" onclick="leave()">ออก</button></div>
+ const p=me();return `<div class="top"><div class="code">ห้อง ${room.code}</div><div class="phase">รอบ ${room.round} • ${phaseLabel()}</div>
+ <div class="row" style="flex:none;gap:6px"><button class="btn ghost" style="padding:8px 12px;font-size:12px" onclick="showWinPopup()">🏆 เงื่อนไขชนะ</button><button class="btn ghost" style="padding:8px 12px;font-size:12px" onclick="showMyPermits()">🎫 การ์ดของฉัน</button><button class="btn ghost" style="padding:8px 12px;font-size:12px" onclick="showMyBuildings()">🏙️ สร้างแล้ว</button><button class="btn ghost" style="padding:8px 12px;font-size:12px" onclick="leave()">ออก</button></div></div>
  ${phaseBar()}${playersBar()}
  <div class="card">${phaseBody(p)}</div>
  <div class="card" style="margin-top:10px">${resources(p)}</div>
@@ -524,7 +542,7 @@ function setJoinMode(mode) {
 }
 
 /* ===================== GLOBALS ===================== */
-Object.assign(window,{createRoom,joinRoom,startGame,leave,setJoinMode,drawFive,bankSell,sendOffer,answerOffer,finishTrade,submitBid,nextAuction,buildSelected,playResource,playObstacle,endTurn,openObstacle,closeModal,selectBuilding,setWinMode,confirmCreate,sellToBank,listBuilding,bidListing,finishResale});
+Object.assign(window,{createRoom,joinRoom,startGame,leave,setJoinMode,drawFive,bankSell,sendOffer,answerOffer,finishTrade,submitBid,nextAuction,buildSelected,playResource,playObstacle,endTurn,openObstacle,closeModal,selectBuilding,setWinMode,confirmCreate,listBuilding,bidListing,finishResale,showWinPopup,showMyPermits,showMyBuildings});
 uid=localStorage.getItem("ctp_uid");if(!uid){uid="guest-"+Math.random().toString(36).slice(2,10);localStorage.setItem("ctp_uid",uid)}
 (async()=>{if(!db){err="กรุณาใส่ firebaseConfig ก่อนใช้งาน";render();return}
  const saved=localStorage.getItem("ctp_code");if(saved){try{const d=await getDoc(doc(db,"rooms",saved));if(d.exists()&&d.data().players.some(p=>p.uid===uid)){code=saved;subscribe();return}}catch(e){}}
