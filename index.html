@@ -37,14 +37,14 @@ label{display:block;color:var(--muted);font-size:12px;margin:10px 0 4px}
 .code{border:1px dashed var(--gold);background:#0006;border-radius:11px;padding:5px 12px;letter-spacing:3px;font-weight:800}
 .players{display:flex;gap:9px;overflow-x:auto;padding:5px 2px 12px}
 .player{min-width:118px;position:relative;text-align:center;background:#0005;border:1px solid var(--line);border-radius:15px;padding:9px}
-.player.me{border-color:var(--gold);box-shadow:0 0 0 2px #f5c84b30}.player.active{border-color:var(--ok);box-shadow:0 0 13px #4fc58a70}
+.player.me{box-shadow:0 0 0 2px #f5c84b30}.player.turn{box-shadow:0 0 13px #4fc58a70}
 .av{font-size:25px}.pname{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mini{font-size:11px;color:var(--gold)}
 .badge{font-size:10px;border-radius:8px;padding:2px 6px;background:var(--ok);color:#06281b;position:absolute;right:4px;top:4px;font-weight:800}
 .badge.wait{background:#000b;color:var(--muted)}
 .resources{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:10px 0}
 .resbox{background:#0005;border:1px solid #fff1;border-radius:12px;padding:8px;text-align:center}.resbox b{display:block;font-size:18px;color:var(--gold)}
 .section-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.section-title h3{font-size:17px}
-.phasebar{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:10px 0 14px}.step{padding:7px 4px;text-align:center;border-radius:9px;background:#0004;border:1px solid #fff1;font-size:11px;color:var(--muted)}
+.phasebar{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin:10px 0 14px}.step{padding:7px 4px;text-align:center;border-radius:9px;background:#0004;border:1px solid #fff1;font-size:11px;color:var(--muted)}
 .step.on{background:#f5c84b;color:var(--ink);font-weight:800;border-color:var(--gold)}
 .hand{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.playing-card{min-height:145px;background:linear-gradient(145deg,#fff9e9,#e6d4af);color:var(--ink);
 border-radius:14px;padding:10px;position:relative;box-shadow:0 7px 14px #0006;border:3px solid #fff;cursor:pointer}
@@ -116,7 +116,8 @@ const PLOTS=Array.from({length:BOARD_N},(_,i)=>{
  if(i%3===0)return{name:"ริมน้ำ",ic:"🌊",price:8,bonusPts:5};
  return{name:"พื้นที่ทั่วไป",ic:"🌳",price:0,bonusPts:0};
 });
-let uid=null,room=null,code=null,unsub=null,joinMode=null,newMaxP=4,err="",selectedCard=null,selectedBuilding=null;
+const ACTIONS_PER_TURN=3;
+let uid=null,room=null,code=null,unsub=null,joinMode=null,newMaxP=4,err="",selectedBuilding=null;
 let winMode="score",winScore=100,winHouse=2,winMid=1,winLarge=1,winGold=50,pendingWin=null,winPopupSeen=false;
 const RESALE_MULT=1.5;
 
@@ -126,23 +127,91 @@ const roomRef=()=>doc(db,"rooms",code);
 const me=()=>room?.players?.find(p=>p.uid===uid);
 const weightedCard=()=>{let a=[];DECK.forEach(c=>{for(let i=0;i<(c.w||1);i++)a.push(c)});return a[Math.floor(Math.random()*a.length)]};
 const canAfford=(r,c)=>Object.entries(c).every(([k,v])=>(r[k]||0)>=v);
-const logAdd=(msg)=>[msg,...(room?.log||[])].slice(0,10);
 function playerName(u){return room.players.find(p=>p.uid===u)?.name||"ผู้เล่น"}
 async function patch(x){await updateDoc(roomRef(),x)}
+async function withFreshRoom(fn){const snap=await getDoc(roomRef());if(!snap.exists())return;return fn(snap.data())}
 function phaseLabel(){return {draw:"🃏 จั่วการ์ด",trade:"🤝 ซื้อขายทรัพยากร",resale:"🏷️ ประมูลทรัพย์สิน",auction:"🔨 ประมูลอาคาร",play:"🏗️ สร้าง / เล่นการ์ด"}[room.roundPhase]||""}
+
+/* ===================== TURN ORDER / ACTION ENGINE ===================== */
+function turnOrderFor(round,players){
+ const n=players.length;if(!n)return[];
+ const start=(round-1)%n;
+ return Array.from({length:n},(_,i)=>players[(start+i)%n].uid);
+}
+function buybackValue(cost){
+ if(!cost)return 0;
+ const resVal=(cost.wood||0)*RES.wood.sell+(cost.brick||0)*RES.brick.sell+(cost.energy||0)*RES.energy.sell;
+ return Math.round((cost.gold||0)+0.5*resVal);
+}
+function resolveResaleTransition(r){
+ let board=[...r.board],ps=[...r.players],log=[...(r.log||[])];
+ (r.listings||[]).filter(l=>!l.closed).forEach(l=>{
+   const bids=Object.entries(l.bids||{});
+   if(bids.length){
+     const [winUid,price]=bids.sort((a,b)=>b[1]-a[1])[0],pr=Number(price);
+     ps=ps.map(x=>{
+       if(x.uid===l.sellerUid)return{...x,resources:{...x.resources,gold:x.resources.gold+pr}};
+       if(x.uid===winUid)return{...x,resources:{...x.resources,gold:x.resources.gold-pr},score:x.score+(l.building.pts||0)};
+       return x;
+     });
+     const bname=ps.find(x=>x.uid===winUid)?.name,sname=ps.find(x=>x.uid===l.sellerUid)?.name;
+     board[l.tile]={...l.building,ownerUid:winUid,owner:bname};
+     log=[`🔨 ${bname} ชนะประมูล "${l.building.n}" จาก ${sname} ที่ ${pr}💰`,...log];
+   }else{
+     const refund=buybackValue(l.building.cost);
+     const sname=ps.find(x=>x.uid===l.sellerUid)?.name;
+     ps=ps.map(x=>x.uid===l.sellerUid?{...x,resources:{...x.resources,gold:x.resources.gold+refund},score:x.score-(l.building.pts||0)}:x);
+     board[l.tile]=null;
+     log=[`🏦 "${l.building.n}" ไม่มีผู้เสนอราคา ขายคืนเกมให้ ${sname} อัตโนมัติ ${refund}💰`,...log];
+   }
+ });
+ checkWinFromArrays(r,ps,board);
+ return {roundPhase:"auction",players:ps,board,listings:[],auction:{buildingIndex:0,bids:{},revealed:false,result:null},log:log.slice(0,10)};
+}
+function phaseTransition(r){
+ if(r.roundPhase==="draw")return{roundPhase:"trade",queue:turnOrderFor(r.round,r.players),actionsLeft:ACTIONS_PER_TURN};
+ if(r.roundPhase==="trade")return{roundPhase:"resale",queue:turnOrderFor(r.round,r.players),actionsLeft:ACTIONS_PER_TURN};
+ if(r.roundPhase==="resale")return resolveResaleTransition(r);
+ if(r.roundPhase==="play"){
+   const nextRound=r.round+1;
+   return{roundPhase:"draw",round:nextRound,queue:turnOrderFor(nextRound,r.players),actionsLeft:1};
+ }
+ return{};
+}
+function advanceAfterAction(r,forceEndTurn){
+ let queue=[...(r.queue||[])];
+ let left=(r.actionsLeft??ACTIONS_PER_TURN)-1;
+ const out={};
+ if(forceEndTurn||left<=0){
+   queue.shift();
+   if(queue.length){out.queue=queue;out.actionsLeft=ACTIONS_PER_TURN}
+   else Object.assign(out,phaseTransition(r));
+ }else{out.queue=queue;out.actionsLeft=left}
+ return out;
+}
+function checkWinFromArrays(r,players,board){
+ const win=r.win||{type:"score",target:100};let winner=null;
+ for(const pl of players){
+   if(win.type==="score"){if(pl.score>=win.target){winner=pl.uid;break}}
+   else{
+     const cnt={0:0,1:0,2:0};board.forEach(t=>{if(t&&t.ownerUid===pl.uid)cnt[t.buildIndex]=(cnt[t.buildIndex]||0)+1});
+     if(cnt[0]>=win.house&&cnt[1]>=win.mid&&cnt[2]>=win.large&&pl.resources.gold>=win.gold){winner=pl.uid;break}
+   }
+ }
+ if(winner)updateDoc(roomRef(),{gameOver:true,winnerUid:winner});
+}
 
 /* ===================== ROOM ===================== */
 function genCode(){const c="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";return Array.from({length:4},()=>c[Math.floor(Math.random()*c.length)]).join("")}
 function blankPlayer(name){
- return {uid,name:name||"ผู้เล่น",resources:{wood:5,brick:5,energy:3,gold:30},score:0,
- cards:[],buildings:[],drawDone:false,tradeDone:false,resaleDone:false,playDone:false};
+ return {uid,name:name||"ผู้เล่น",resources:{wood:5,brick:5,energy:3,gold:30},score:0,cards:[]};
 }
 async function createRoom(name){
  err="";if(!db){err="ยังไม่ได้ตั้งค่า Firebase";render();return}
  const c=genCode(),p=blankPlayer(name);
  const data={code:c,hostUid:uid,maxPlayers:newMaxP,started:false,round:1,roundPhase:"draw",
  players:[p],board:Array(BOARD_N).fill(null),log:[],auction:{buildingIndex:0,bids:{},revealed:false,result:null},
- offers:[],listings:[],gameOver:false,winnerUid:null,
+ offers:[],listings:[],queue:[],actionsLeft:0,gameOver:false,winnerUid:null,
  win:pendingWin||{type:"score",target:100}};
  await setDoc(doc(db,"rooms",c),data);code=c;localStorage.setItem("ctp_code",c);localStorage.setItem("ctp_name",name||"");subscribe();
 }
@@ -163,55 +232,86 @@ function subscribe(){
 function leave(){if(unsub)unsub();unsub=null;room=null;code=null;winPopupSeen=false;localStorage.removeItem("ctp_code");render()}
 async function startGame(){
  if(room.players.length<2)return;
- const players=room.players.map(p=>({...p,resources:{wood:5,brick:5,energy:3,gold:30},cards:[],buildings:[],drawDone:false,tradeDone:false,resaleDone:false,playDone:false}));
- await patch({started:true,round:1,roundPhase:"draw",players,log:["🎬 เริ่มเกม — ทุกคนได้รับทรัพยากรและเงินเท่ากัน"]});
+ const players=room.players.map(p=>({...p,resources:{wood:5,brick:5,energy:3,gold:30},cards:[],score:0}));
+ await patch({started:true,round:1,roundPhase:"draw",players,queue:turnOrderFor(1,players),actionsLeft:1,log:["🎬 เริ่มเกม — สลับกันเล่นทีละคนตามลำดับ"]});
 }
 
-/* ===================== DRAW 5 ===================== */
+/* ===================== DRAW (turn-based, 1 action) ===================== */
 async function drawFive(){
- const p=me();if(!p||room.roundPhase!=="draw"||p.drawDone)return;
- const cards=Array.from({length:5},weightedCard).map(c=>({id:"k"+Date.now()+Math.random().toString(36).slice(2,7),cardId:c.id,ic:c.ic,n:c.n,type:c.type,desc:c.desc,eff:c.eff||null}));
- const players=room.players.map(x=>x.uid===uid?{...x,cards:[...(x.cards||[]),...cards],drawDone:true}:x);
- const all=players.every(x=>x.drawDone);
- const pch={players,log:[`🃏 ${p.name} จั่วการ์ด 5 ใบ`,...(room.log||[])].slice(0,10)};
- if(all)pch.roundPhase="trade",pch.players=players.map(x=>({...x,tradeDone:false}));
- await patch(pch);
+ if(!room||room.roundPhase!=="draw"||room.queue?.[0]!==uid)return;
+ await withFreshRoom(async r=>{
+   if(r.roundPhase!=="draw"||r.queue?.[0]!==uid)return;
+   const p=r.players.find(x=>x.uid===uid);
+   const cards=Array.from({length:5},weightedCard).map(c=>({id:"k"+Date.now()+Math.random().toString(36).slice(2,7),cardId:c.id,ic:c.ic,n:c.n,type:c.type,desc:c.desc,eff:c.eff||null}));
+   const players=r.players.map(x=>x.uid===uid?{...x,cards:[...(x.cards||[]),...cards]}:x);
+   const log=[`🃏 ${p.name} จั่วการ์ด 5 ใบ`,...(r.log||[])].slice(0,10);
+   const newR={...r,players,log};
+   const adv=advanceAfterAction(newR,true);
+   await updateDoc(roomRef(),{players,log,...adv});
+ });
 }
 
-/* ===================== RESOURCE TRADING ===================== */
+/* ===================== END TURN (shared: trade/resale/play) ===================== */
+async function endMyTurn(){
+ if(!room||!["trade","resale","play"].includes(room.roundPhase)||room.queue?.[0]!==uid)return;
+ await withFreshRoom(async r=>{
+   if(r.queue?.[0]!==uid)return;
+   const adv=advanceAfterAction(r,true);
+   await updateDoc(roomRef(),adv);
+ });
+}
+
+/* ===================== RESOURCE TRADING (turn-based) ===================== */
 async function bankSell(res,qty){
- qty=Number(qty);const p=me();if(!RES[res]||qty<=0||p.resources[res]<qty)return;
- const r={...p.resources,[res]:p.resources[res]-qty,gold:p.resources.gold+qty*RES[res].sell};
- await patch({players:room.players.map(x=>x.uid===uid?{...x,resources:r}:x),
- log:logAdd(`🏦 ${p.name} ขาย${RES[res].n} ${qty} ให้ธนาคาร ได้ ${qty*RES[res].sell}💰`)});
+ qty=Number(qty);
+ if(!room||room.roundPhase!=="trade"||room.queue?.[0]!==uid)return;
+ await withFreshRoom(async r=>{
+   if(r.roundPhase!=="trade"||r.queue?.[0]!==uid)return;
+   const p=r.players.find(x=>x.uid===uid);
+   if(!RES[res]||qty<=0||p.resources[res]<qty)return;
+   const nr={...p.resources,[res]:p.resources[res]-qty,gold:p.resources.gold+qty*RES[res].sell};
+   const players=r.players.map(x=>x.uid===uid?{...x,resources:nr}:x);
+   const log=[`🏦 ${p.name} ขาย${RES[res].n} ${qty} ให้ธนาคาร ได้ ${qty*RES[res].sell}💰`,...(r.log||[])].slice(0,10);
+   const newR={...r,players,log};
+   const adv=advanceAfterAction(newR,false);
+   await updateDoc(roomRef(),{players,log,...adv});
+ });
 }
 async function sendOffer(target,res,qty,price){
- qty=Number(qty);price=Number(price);const p=me();
- if(!target||target===uid||!RES[res]||qty<=0||price<0||p.resources[res]<qty)return;
- const offer={id:"o"+Date.now()+Math.random().toString(36).slice(2,7),from:uid,to:target,res,qty,price,status:"pending"};
- await patch({offers:[...(room.offers||[]),offer]});
+ qty=Number(qty);price=Number(price);
+ if(!room||room.roundPhase!=="trade"||room.queue?.[0]!==uid)return;
+ await withFreshRoom(async r=>{
+   if(r.roundPhase!=="trade"||r.queue?.[0]!==uid)return;
+   const p=r.players.find(x=>x.uid===uid);
+   if(!target||target===uid||!RES[res]||qty<=0||price<0||p.resources.gold<price)return;
+   const offer={id:"o"+Date.now()+Math.random().toString(36).slice(2,7),from:uid,to:target,res,qty,price,status:"pending"};
+   const offers=[...(r.offers||[]),offer];
+   const newR={...r,offers};
+   const adv=advanceAfterAction(newR,false);
+   await updateDoc(roomRef(),{offers,...adv});
+ });
 }
 async function answerOffer(id,accept){
- const fresh=await getDoc(roomRef());if(!fresh.exists())return;const r=fresh.data();
- const offer=(r.offers||[]).find(o=>o.id===id);if(!offer||offer.to!==uid||offer.status!=="pending")return;
- const buyer=r.players.find(p=>p.uid===offer.to),seller=r.players.find(p=>p.uid===offer.from);
- let players=r.players,offers=(r.offers||[]).map(o=>o.id===id?{...o,status:accept?"accepted":"rejected"}:o);
- if(accept && buyer.resources.gold>=offer.price && seller.resources[offer.res]>=offer.qty){
-   players=players.map(p=>{
-     if(p.uid===offer.from)return {...p,resources:{...p.resources,[offer.res]:p.resources[offer.res]-offer.qty,gold:p.resources.gold+offer.price}};
-     if(p.uid===offer.to)return {...p,resources:{...p.resources,[offer.res]:p.resources[offer.res]+offer.qty,gold:p.resources.gold-offer.price}};
-     return p;
-   });
- }
- await updateDoc(roomRef(),{players,offers,log:[accept?`🤝 ${seller.name} ขาย${RES[offer.res].n} ${offer.qty} ให้ ${buyer.name} ราคา ${offer.price}💰`:`❌ ${seller.name} ปฏิเสธข้อเสนอจาก ${buyer.name}`,...(r.log||[])].slice(0,10)});
-}
-async function finishTrade(){
- const p=me();if(room.roundPhase!=="trade"||p.tradeDone)return;
- const players=room.players.map(x=>x.uid===uid?{...x,tradeDone:true}:x),all=players.every(x=>x.tradeDone);
- await patch({players,roundPhase:all?"resale":"trade"});
+ await withFreshRoom(async r=>{
+   const offer=(r.offers||[]).find(o=>o.id===id);if(!offer||offer.to!==uid||offer.status!=="pending")return;
+   const buyer=r.players.find(p=>p.uid===offer.from),seller=r.players.find(p=>p.uid===offer.to);
+   let players=r.players,offers=(r.offers||[]).map(o=>o.id===id?{...o,status:accept?"accepted":"rejected"}:o);
+   let log=r.log||[];
+   if(accept && buyer.resources.gold>=offer.price && seller.resources[offer.res]>=offer.qty){
+     players=players.map(p=>{
+       if(p.uid===offer.from)return {...p,resources:{...p.resources,[offer.res]:p.resources[offer.res]+offer.qty,gold:p.resources.gold-offer.price}};
+       if(p.uid===offer.to)return {...p,resources:{...p.resources,[offer.res]:p.resources[offer.res]-offer.qty,gold:p.resources.gold+offer.price}};
+       return p;
+     });
+     log=[`🤝 ${buyer.name} ซื้อ${RES[offer.res].n} ${offer.qty} จาก ${seller.name} ราคา ${offer.price}💰`,...log].slice(0,10);
+   }else if(!accept){
+     log=[`❌ ${seller.name} ปฏิเสธข้อเสนอซื้อจาก ${buyer.name}`,...log].slice(0,10);
+   }
+   await updateDoc(roomRef(),{players,offers,log});
+ });
 }
 
-/* ===================== BLIND AUCTION ===================== */
+/* ===================== BLIND AUCTION (simultaneous, host advances) ===================== */
 async function submitBid(amount){
  amount=Number(amount);const p=me();const a=room.auction||{};
  if(room.roundPhase!=="auction"||a.revealed||a.bids[uid]!==undefined||amount<0||amount>p.resources.gold)return;
@@ -233,151 +333,121 @@ async function submitBid(amount){
  }else await updateDoc(roomRef(),{auction:{...au,bids}});
 }
 async function nextAuction(){
+ if(!room||room.hostUid!==uid)return;
  if(!room.auction?.revealed)return;
  const next=(room.auction.buildingIndex||0)+1;
  if(next>=BUILDINGS.length){
-   await patch({roundPhase:"play",players:room.players.map(p=>({...p,playDone:false}))});
+   await patch({roundPhase:"play",queue:turnOrderFor(room.round,room.players),actionsLeft:ACTIONS_PER_TURN});
  }else await patch({auction:{buildingIndex:next,bids:{},revealed:false,result:null}});
 }
 
-/* ===================== PLAY / BUILD ===================== */
+/* ===================== PLAY / BUILD (turn-based) ===================== */
 function selectBuildingCard(id){selectedBuilding=selectedBuilding===id?null:id;render()}
 async function buildAt(idx){
- const p=me();if(room.roundPhase!=="play"||p.playDone||!selectedBuilding||room.board[idx])return;
- const card=(p.cards||[]).find(c=>c.id===selectedBuilding&&c.type==="building");if(!card)return;
- const b=BUILDINGS[card.buildingIndex],plot=PLOTS[idx];
- const totalGold=(b.cost.gold||0)+(plot.price||0);
- if(p.resources.wood<b.cost.wood||p.resources.brick<b.cost.brick||p.resources.energy<b.cost.energy||p.resources.gold<totalGold)return;
- const bonusPts=b.pts+(plot.bonusPts||0);
- const board=[...room.board];board[idx]={ic:b.ic,owner:p.name,ownerUid:uid,n:b.n,cost:b.cost,pts:bonusPts,buildIndex:card.buildingIndex,plot:plot.name,plotIc:plot.ic};
- const players=room.players.map(x=>x.uid===uid?{...x,
-   resources:{wood:x.resources.wood-b.cost.wood,brick:x.resources.brick-b.cost.brick,energy:x.resources.energy-b.cost.energy,gold:x.resources.gold-totalGold},
-   score:x.score+bonusPts,cards:x.cards.filter(c=>c.id!==selectedBuilding)}:x);
- selectedBuilding=null;
- await patch({board,players,log:logAdd(`🏗️ ${p.name} สร้าง "${b.n}" บน${plot.name} +${bonusPts}⭐ (ค่าที่ดิน ${plot.price}💰)`)});
- checkWin(players,board);
+ if(!room||room.roundPhase!=="play"||room.queue?.[0]!==uid||!selectedBuilding||room.board[idx])return;
+ await withFreshRoom(async r=>{
+   if(r.roundPhase!=="play"||r.queue?.[0]!==uid||r.board[idx])return;
+   const p=r.players.find(x=>x.uid===uid);
+   const card=(p.cards||[]).find(c=>c.id===selectedBuilding&&c.type==="building");if(!card)return;
+   const b=BUILDINGS[card.buildingIndex],plot=PLOTS[idx];
+   const totalGold=(b.cost.gold||0)+(plot.price||0);
+   if(p.resources.wood<b.cost.wood||p.resources.brick<b.cost.brick||p.resources.energy<b.cost.energy||p.resources.gold<totalGold)return;
+   const bonusPts=b.pts+(plot.bonusPts||0);
+   const board=[...r.board];board[idx]={ic:b.ic,owner:p.name,ownerUid:uid,n:b.n,cost:b.cost,pts:bonusPts,buildIndex:card.buildingIndex,plot:plot.name,plotIc:plot.ic};
+   const players=r.players.map(x=>x.uid===uid?{...x,
+     resources:{wood:x.resources.wood-b.cost.wood,brick:x.resources.brick-b.cost.brick,energy:x.resources.energy-b.cost.energy,gold:x.resources.gold-totalGold},
+     score:x.score+bonusPts,cards:x.cards.filter(c=>c.id!==selectedBuilding)}:x);
+   selectedBuilding=null;
+   const log=[`🏗️ ${p.name} สร้าง "${b.n}" บน${plot.name} +${bonusPts}⭐ (ค่าที่ดิน ${plot.price}💰)`,...(r.log||[])].slice(0,10);
+   const newR={...r,players,board,log};
+   checkWinFromArrays(newR,players,board);
+   const adv=advanceAfterAction(newR,false);
+   await updateDoc(roomRef(),{players,board,log,...adv});
+ });
 }
-function buybackValue(cost){
- if(!cost)return 0;
- const resVal=(cost.wood||0)*RES.wood.sell+(cost.brick||0)*RES.brick.sell+(cost.energy||0)*RES.energy.sell;
- return Math.round((cost.gold||0)+0.5*resVal);
-}
-function checkWin(players,board){
- const win=room.win||{type:"score",target:100};let winner=null;
- for(const pl of players){
-   if(win.type==="score"){if(pl.score>=win.target){winner=pl.uid;break}}
-   else{
-     const cnt={0:0,1:0,2:0};board.forEach(t=>{if(t&&t.ownerUid===pl.uid)cnt[t.buildIndex]=(cnt[t.buildIndex]||0)+1});
-     if(cnt[0]>=win.house&&cnt[1]>=win.mid&&cnt[2]>=win.large&&pl.resources.gold>=win.gold){winner=pl.uid;break}
-   }
- }
- if(winner)patch({gameOver:true,winnerUid:winner});
-}
-/* ===================== RESALE: SECONDHAND PROPERTY AUCTION ===================== */
+/* ===================== RESALE: SECONDHAND PROPERTY AUCTION (turn-based) ===================== */
 async function listBuilding(idx){
- const p=me();if(room.roundPhase!=="resale"||p.resaleDone)return;
- const t=room.board[idx];if(!t||t.ownerUid!==uid)return;
- if((room.listings||[]).some(l=>l.tile===idx&&!l.closed))return;
- const price=Math.round((t.cost?.gold||0)*RESALE_MULT);
- const listing={id:"l"+Date.now()+Math.random().toString(36).slice(2,6),tile:idx,sellerUid:uid,startPrice:price,bids:{},building:t,closed:false};
- await patch({listings:[...(room.listings||[]),listing],log:logAdd(`🏷️ ${p.name} เปิดประมูล "${t.n}" ที่ ${price}💰 (1.5 เท่าของราคากลาง)`)});
+ if(!room||room.roundPhase!=="resale"||room.queue?.[0]!==uid)return;
+ await withFreshRoom(async r=>{
+   if(r.roundPhase!=="resale"||r.queue?.[0]!==uid)return;
+   const p=r.players.find(x=>x.uid===uid);
+   const t=r.board[idx];if(!t||t.ownerUid!==uid)return;
+   if((r.listings||[]).some(l=>l.tile===idx&&!l.closed))return;
+   const price=Math.round((t.cost?.gold||0)*RESALE_MULT);
+   const listing={id:"l"+Date.now()+Math.random().toString(36).slice(2,6),tile:idx,sellerUid:uid,startPrice:price,bids:{},building:t,closed:false};
+   const listings=[...(r.listings||[]),listing];
+   const log=[`🏷️ ${p.name} เปิดประมูล "${t.n}" ที่ ${price}💰 (1.5 เท่าของราคากลาง)`,...(r.log||[])].slice(0,10);
+   const newR={...r,listings,log};
+   const adv=advanceAfterAction(newR,false);
+   await updateDoc(roomRef(),{listings,log,...adv});
+ });
 }
 async function bidListing(id,amount){
  amount=Number(amount);
- if(room.roundPhase!=="resale")return;
- const fresh=await getDoc(roomRef());if(!fresh.exists())return;const r=fresh.data();
- const listings=r.listings||[],l=listings.find(x=>x.id===id),buyer=r.players.find(x=>x.uid===uid);
- const top=Math.max(0,...Object.values(l?.bids||{}));
- if(!l||l.closed||l.sellerUid===uid||!buyer||amount<l.startPrice||amount<=top||amount>buyer.resources.gold)return;
- await updateDoc(roomRef(),{listings:listings.map(x=>x.id===id?{...x,bids:{...x.bids,[uid]:amount}}:x)});
-}
-async function finishResale(){
- const p=me();if(room.roundPhase!=="resale"||p.resaleDone)return;
- const players=room.players.map(x=>x.uid===uid?{...x,resaleDone:true}:x);
- if(!players.every(x=>x.resaleDone)){await patch({players});return}
- const fresh=await getDoc(roomRef());if(!fresh.exists())return;const r=fresh.data();
- let board=[...r.board],ps=r.players.map(x=>x.uid===uid?{...x,resaleDone:true}:x),log=[...(r.log||[])];
- (r.listings||[]).filter(l=>!l.closed).forEach(l=>{
-   const bids=Object.entries(l.bids||{});
-   if(bids.length){
-     const [winUid,price]=bids.sort((a,b)=>b[1]-a[1])[0],pr=Number(price);
-     ps=ps.map(x=>{
-       if(x.uid===l.sellerUid)return{...x,resources:{...x.resources,gold:x.resources.gold+pr}};
-       if(x.uid===winUid)return{...x,resources:{...x.resources,gold:x.resources.gold-pr},score:x.score+(l.building.pts||0)};
-       return x;
-     });
-     const bname=ps.find(x=>x.uid===winUid)?.name,sname=ps.find(x=>x.uid===l.sellerUid)?.name;
-     board[l.tile]={...l.building,ownerUid:winUid,owner:bname};
-     log=[`🔨 ${bname} ชนะประมูล "${l.building.n}" จาก ${sname} ที่ ${pr}💰`,...log];
-   }else{
-     const refund=buybackValue(l.building.cost);
-     const sname=ps.find(x=>x.uid===l.sellerUid)?.name;
-     ps=ps.map(x=>x.uid===l.sellerUid?{...x,resources:{...x.resources,gold:x.resources.gold+refund},score:x.score-(l.building.pts||0)}:x);
-     board[l.tile]=null;
-     log=[`🏦 "${l.building.n}" ไม่มีผู้เสนอราคา ขายคืนเกมให้ ${sname} อัตโนมัติ ${refund}💰`,...log];
-   }
+ if(!room||room.roundPhase!=="resale"||room.queue?.[0]!==uid)return;
+ await withFreshRoom(async r=>{
+   if(r.roundPhase!=="resale"||r.queue?.[0]!==uid)return;
+   const listings=r.listings||[],l=listings.find(x=>x.id===id),buyer=r.players.find(x=>x.uid===uid);
+   const top=Math.max(0,...Object.values(l?.bids||{}));
+   if(!l||l.closed||l.sellerUid===uid||!buyer||amount<l.startPrice||amount<=top||amount>buyer.resources.gold)return;
+   const newListings=listings.map(x=>x.id===id?{...x,bids:{...x.bids,[uid]:amount}}:x);
+   const newR={...r,listings:newListings};
+   const adv=advanceAfterAction(newR,false);
+   await updateDoc(roomRef(),{listings:newListings,...adv});
  });
- await updateDoc(roomRef(),{players:ps,board,listings:[],roundPhase:"auction",auction:{buildingIndex:0,bids:{},revealed:false,result:null},log:log.slice(0,10)});
- checkWin(ps,board);
 }
 async function playResource(cardId){
- const p=me();if(room.roundPhase!=="play"||p.playDone)return;
- const idx=p.cards.findIndex(c=>c.id===cardId);if(idx<0)return;const card=p.cards[idx];
- 
- // อนุญาตให้ใช้การ์ดประเภททรัพยากรหรือเพิ่มของได้ทันทีในตาเล่น
- const r={...p.resources};
- if(card.eff) {
-   Object.entries(card.eff).forEach(([k,v])=>r[k]=(r[k]||0)+v);
- } else {
-   // เผื่อกรณีการ์ดไม่มี eff สำเร็จรูป ให้เพิ่มทรัพยากรพื้นฐานตามไอดีการ์ด
-   if(card.cardId==="wood") r.wood=(r.wood||0)+3;
-   else if(card.cardId==="brick") r.brick=(r.brick||0)+3;
-   else if(card.cardId==="energy") r.energy=(r.energy||0)+2;
-   else if(card.cardId==="money"||card.cardId==="gift") r.gold=(r.gold||0)+10;
-   else r.gold=(r.gold||0)+5;
- }
-
- const cards=p.cards.filter(c=>c.id!==cardId);
- await patch({players:room.players.map(x=>x.uid===uid?{...x,resources:r,cards}:x),
- log:logAdd(`🎁 ${p.name} ใช้การ์ด "${card.n}" สำเร็จ`)});
+ if(!room||room.roundPhase!=="play"||room.queue?.[0]!==uid)return;
+ await withFreshRoom(async r=>{
+   if(r.roundPhase!=="play"||r.queue?.[0]!==uid)return;
+   const p=r.players.find(x=>x.uid===uid);
+   const idx=(p.cards||[]).findIndex(c=>c.id===cardId);if(idx<0)return;const card=p.cards[idx];
+   if(card.type!=="resource")return;
+   const rr={...p.resources};
+   if(card.eff){Object.entries(card.eff).forEach(([k,v])=>rr[k]=(rr[k]||0)+v)}
+   else{
+     if(card.cardId==="wood")rr.wood=(rr.wood||0)+3;
+     else if(card.cardId==="brick")rr.brick=(rr.brick||0)+3;
+     else if(card.cardId==="energy")rr.energy=(rr.energy||0)+2;
+     else if(card.cardId==="money"||card.cardId==="gift")rr.gold=(rr.gold||0)+10;
+     else rr.gold=(rr.gold||0)+5;
+   }
+   const cards=p.cards.filter(c=>c.id!==cardId);
+   const players=r.players.map(x=>x.uid===uid?{...x,resources:rr,cards}:x);
+   const log=[`🎁 ${p.name} ใช้การ์ด "${card.n}" สำเร็จ`,...(r.log||[])].slice(0,10);
+   const newR={...r,players,log};
+   const adv=advanceAfterAction(newR,false);
+   await updateDoc(roomRef(),{players,log,...adv});
+ });
 }
 async function playObstacle(cardId,targetUid){
- const p=me();if(room.roundPhase!=="play"||p.playDone)return;
- const idx=p.cards.findIndex(c=>c.id===cardId);if(idx<0)return;const card=p.cards[idx];
- if(card.type!=="obstacle"||targetUid===uid)return;
- let ps=room.players.map(x=>({...x,resources:{...x.resources}}));
- const attacker=ps.find(x=>x.uid===uid),target=ps.find(x=>x.uid===targetUid);
- const original=room.players.find(x=>x.uid===targetUid);
- if(card.cardId==="thief"){
-   const take=Math.min(6,original.resources.gold);
-   target.resources.gold-=take; attacker.resources.gold+=take;
- }
- if(card.cardId==="rat"){
-   const take=Math.min(3,original.resources.wood);
-   target.resources.wood-=take; attacker.resources.wood+=take;
- }
- if(card.cardId==="storm")target.resources.brick=Math.max(0,target.resources.brick-2);
- if(card.cardId==="blackout")target.resources.energy=Math.max(0,target.resources.energy-2);
- if(card.cardId==="swap"){
-   const mine=attacker.resources.gold;attacker.resources.gold=target.resources.gold;target.resources.gold=mine;
- }
- ps=ps.map(x=>x.uid===uid?attacker:x.uid===targetUid?target:x);
- ps=ps.map(x=>x.uid===uid?{...x,cards:x.cards.filter(c=>c.id!==cardId)}:x);
- await patch({players:ps,log:logAdd(`🃏 ${p.name} ใช้ "${card.n}" กับ ${target.name}`)});
- showPopup(`✅ ใช้ "${card.n}" กับ ${target.name} สำเร็จ!`);
+ if(!room||room.roundPhase!=="play"||room.queue?.[0]!==uid)return;
+ await withFreshRoom(async r=>{
+   if(r.roundPhase!=="play"||r.queue?.[0]!==uid)return;
+   const p=r.players.find(x=>x.uid===uid);
+   const idx=(p.cards||[]).findIndex(c=>c.id===cardId);if(idx<0)return;const card=p.cards[idx];
+   if(card.type!=="obstacle"||targetUid===uid)return;
+   let ps=r.players.map(x=>({...x,resources:{...x.resources}}));
+   const attacker=ps.find(x=>x.uid===uid),target=ps.find(x=>x.uid===targetUid);
+   const original=r.players.find(x=>x.uid===targetUid);
+   if(card.cardId==="thief"){const take=Math.min(6,original.resources.gold);target.resources.gold-=take;attacker.resources.gold+=take}
+   if(card.cardId==="rat"){const take=Math.min(3,original.resources.wood);target.resources.wood-=take;attacker.resources.wood+=take}
+   if(card.cardId==="storm")target.resources.brick=Math.max(0,target.resources.brick-2);
+   if(card.cardId==="blackout")target.resources.energy=Math.max(0,target.resources.energy-2);
+   if(card.cardId==="swap"){const mine=attacker.resources.gold;attacker.resources.gold=target.resources.gold;target.resources.gold=mine}
+   ps=ps.map(x=>x.uid===uid?attacker:x.uid===targetUid?target:x);
+   ps=ps.map(x=>x.uid===uid?{...x,cards:x.cards.filter(c=>c.id!==cardId)}:x);
+   const log=[`🃏 ${p.name} ใช้ "${card.n}" กับ ${target.name}`,...(r.log||[])].slice(0,10);
+   const newR={...r,players:ps,log};
+   const adv=advanceAfterAction(newR,false);
+   await updateDoc(roomRef(),{players:ps,log,...adv});
+   showPopup(`✅ ใช้ "${card.n}" กับ ${target.name} สำเร็จ!`);
+ });
 }
 function showPopup(msg){
  const m=document.getElementById("modal");
  m.innerHTML=`<div class="card center" style="max-width:340px;margin:30vh auto"><div style="font-size:40px">🎉</div><p style="margin-top:8px;font-weight:700">${esc(msg)}</p><button class="btn gold" style="margin-top:14px" onclick="closeModal()">ตกลง</button></div>`;
  m.style.display="block";
-}
-async function endTurn(){
- const p=me();if(room.roundPhase!=="play"||p.playDone)return;
- const players=room.players.map(x=>x.uid===uid?{...x,playDone:true}:x);
- if(players.every(x=>x.playDone)){
-   const reset=players.map(x=>({...x,drawDone:false,tradeDone:false,resaleDone:false,playDone:false}));
-   await patch({players:reset,round:room.round+1,roundPhase:"draw",auction:{buildingIndex:0,bids:{},revealed:false,result:null},listings:[]});
- }else await patch({players});
 }
 
 /* ===================== WIN CONDITION / MY BUILDINGS POPUPS ===================== */
@@ -388,7 +458,7 @@ function colorForUid(u){
 }
 function showMyPermits(){
  const p=me();const items=(p?.cards||[]).filter(c=>c.type==="building");
- const body=items.length?`<div class="inventory">${items.map(c=>`<div class="building"><h4>${c.ic} ${c.n}</h4><small>ใช้ 🪵${c.cost.wood} 🧱${c.cost.brick} ⚡${c.cost.energy} 💰${c.cost.gold}+ค่าที่ดิน → ⭐${c.pts}</small></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีการ์ดสิ่งปลูกสร้างที่รอสร้าง — ต้องประมูลให้ได้ก่อน (ดูได้ในมือไพ่ช่วงรอบเล่นด้วย)</div>`;
+ const body=items.length?`<div class="inventory">${items.map(c=>`<div class="building"><h4>${c.ic} ${c.n}</h4><small>ใช้ 🪵${c.cost.wood} 🧱${c.cost.brick} ⚡${c.cost.energy} 💰${c.cost.gold}+ค่าที่ดิน → ⭐${c.pts}</small></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีการ์ดสิ่งปลูกสร้างที่รอสร้าง — ต้องประมูลให้ได้ก่อน</div>`;
  const m=document.getElementById("modal");
  m.innerHTML=`<div class="card" style="max-width:440px;margin:10vh auto"><div class="section-title"><h3>🎫 การ์ดสิ่งปลูกสร้างของฉัน</h3></div><div class="sub" style="margin-bottom:10px">รายการที่ประมูลได้แล้วแต่ยังไม่ได้สร้าง</div>${body}<button class="btn ghost" style="width:100%;margin-top:12px" onclick="closeModal()">ปิด</button></div>`;
  m.style.display="block";
@@ -409,68 +479,78 @@ function showMyBuildings(){
 /* ===================== UI ===================== */
 function phaseBar(){
  const arr=[["draw","🃏 จั่ว"],["trade","🤝 ซื้อขาย"],["resale","🏷️ ขายทรัพย์สิน"],["auction","🔨 ประมูลอาคาร"],["play","🏗️ เล่น/สร้าง"]];
- return `<div class="phasebar" style="grid-template-columns:repeat(5,1fr)">${arr.map(x=>`<div class="step ${room.roundPhase===x[0]?"on":""}">${x[1]}</div>`).join("")}</div>`;
+ return `<div class="phasebar">${arr.map(x=>`<div class="step ${room.roundPhase===x[0]?"on":""}">${x[1]}</div>`).join("")}</div>`;
 }
 function playersBar(){
  const phase=room.roundPhase;
  return `<div class="players">${room.players.map((p,i)=>{
    let badge="";
-   if(phase==="draw")badge=p.drawDone?`<span class="badge">ครบ</span>`:`<span class="badge wait">ยังไม่จั่ว</span>`;
-   if(phase==="trade")badge=p.tradeDone?`<span class="badge">พร้อม</span>`:`<span class="badge wait">ซื้อขาย</span>`;
-   if(phase==="resale")badge=p.resaleDone?`<span class="badge">พร้อม</span>`:`<span class="badge wait">ประมูล</span>`;
+   if(["draw","trade","resale","play"].includes(phase)){
+     if(room.queue?.[0]===p.uid)badge=`<span class="badge">ตาเล่น</span>`;
+     else if((room.queue||[]).includes(p.uid))badge=`<span class="badge wait">รอคิว</span>`;
+     else badge=`<span class="badge wait">เสร็จแล้ว</span>`;
+   }
    if(phase==="auction")badge=room.auction?.bids?.[p.uid]!==undefined?`<span class="badge">ลงแล้ว</span>`:`<span class="badge wait">ยังไม่ลง</span>`;
-   if(phase==="play")badge=p.playDone?`<span class="badge">เล่นแล้ว</span>`:`<span class="badge wait">กำลังเล่น</span>`;
-   return `<div class="player ${p.uid===uid?"me":""}" style="border-color:${colorForUid(p.uid)}">${badge}<div class="av">${AV[i%AV.length]}</div><div class="pname">${esc(p.name)}</div><div class="mini">⭐${p.score} • 💰${p.resources.gold}</div></div>`;
+   return `<div class="player ${p.uid===uid?"me":""} ${room.queue?.[0]===p.uid?"turn":""}" style="border-color:${colorForUid(p.uid)}">${badge}<div class="av">${AV[i%AV.length]}</div><div class="pname">${esc(p.name)}</div><div class="mini">⭐${p.score} • 💰${p.resources.gold}</div></div>`;
  }).join("")}</div>`;
 }
 function resources(p){return `<div class="resources">${["wood","brick","energy","gold"].map(k=>`<div class="resbox">${RES[k].i}<b>${p.resources[k]}</b><span class="sub">${RES[k].n}</span></div>`).join("")}<div class="resbox">⭐<b>${p.score}</b><span class="sub">คะแนน</span></div></div>`}
 function handView(p){
- return `<div class="hand">${(p.cards||[]).map(c=>{
-   const clickable=room.roundPhase==="play"&&!me().playDone;
-   if(c.type==="building"){
-     const sel=selectedBuilding===c.id;
-     const action=clickable?`selectBuildingCard('${c.id}')`:"";
-     return `<div class="playing-card buildingcard${sel?" selected":""}" ${action?`onclick="${action}"`:""}>
-     <span class="tag">สิ่งปลูกสร้าง</span><div class="icon">${c.ic}</div><div class="cn">${esc(c.n)}</div>
-     <div class="cd">🪵${c.cost.wood} 🧱${c.cost.brick} ⚡${c.cost.energy} 💰${c.cost.gold}+ค่าที่ดิน → ⭐${c.pts}</div>
-     ${clickable?`<div class="cd" style="margin-top:7px;font-weight:800">${sel?"✓ เลือกแล้ว แตะพื้นที่บนกระดาน":"แตะเพื่อเลือกสร้าง"}</div>`:""}</div>`;
-   }
-   const action=clickable?(c.type==="obstacle"?`openObstacle('${c.id}')`:`playResource('${c.id}')`):"";
-   return `<div class="playing-card ${c.type==="obstacle"?"obstacle":""}" ${action?`onclick="${action}"`:""}>
-   <span class="tag">${c.type==="obstacle"?"ขัดขวาง":"ทรัพยากร"}</span><div class="icon">${c.ic}</div><div class="cn">${esc(c.n)}</div><div class="cd">${esc(c.desc)}</div>${clickable?`<div class="cd" style="margin-top:7px;font-weight:800">${c.type==="obstacle"?"แตะเพื่อเลือกเป้าหมาย":"แตะเพื่อใช้การ์ด"}</div>`:""}</div>`;
- }).join("")||`<div class="notice">ยังไม่มีการ์ดในมือ</div>`}</div>`;
+ const cards=p.cards||[];
+ const buildings=cards.filter(c=>c.type==="building");
+ const resList=cards.filter(c=>c.type==="resource");
+ const obstacles=cards.filter(c=>c.type==="obstacle");
+ const clickable=room.roundPhase==="play"&&room.queue?.[0]===uid;
+ const section=(title,list,renderFn)=>list.length?`<div style="margin-top:12px"><div class="sub" style="margin-bottom:6px;font-weight:800">${title} (${list.length})</div><div class="hand">${list.map(renderFn).join("")}</div></div>`:"";
+ const buildingCard=c=>{
+   const sel=selectedBuilding===c.id;
+   const action=clickable?`selectBuildingCard('${c.id}')`:"";
+   return `<div class="playing-card buildingcard${sel?" selected":""}" ${action?`onclick="${action}"`:""}>
+   <span class="tag">สิ่งปลูกสร้าง</span><div class="icon">${c.ic}</div><div class="cn">${esc(c.n)}</div>
+   <div class="cd">🪵${c.cost.wood} 🧱${c.cost.brick} ⚡${c.cost.energy} 💰${c.cost.gold}+ค่าที่ดิน → ⭐${c.pts}</div>
+   ${clickable?`<div class="cd" style="margin-top:7px;font-weight:800">${sel?"✓ เลือกแล้ว แตะพื้นที่บนกระดาน":"แตะเพื่อเลือกสร้าง"}</div>`:""}</div>`;
+ };
+ const resCard=c=>`<div class="playing-card" ${clickable?`onclick="playResource('${c.id}')"`:""}>
+ <span class="tag">ทรัพยากร</span><div class="icon">${c.ic}</div><div class="cn">${esc(c.n)}</div><div class="cd">${esc(c.desc)}</div>${clickable?`<div class="cd" style="margin-top:7px;font-weight:800">แตะเพื่อใช้การ์ด</div>`:""}</div>`;
+ const obsCard=c=>`<div class="playing-card obstacle" ${clickable?`onclick="openObstacle('${c.id}')"`:""}>
+ <span class="tag">ขัดขวาง</span><div class="icon">${c.ic}</div><div class="cn">${esc(c.n)}</div><div class="cd">${esc(c.desc)}</div>${clickable?`<div class="cd" style="margin-top:7px;font-weight:800">แตะเพื่อเลือกเป้าหมาย</div>`:""}</div>`;
+ const out=`${section("🏗️ การ์ดสิ่งปลูกสร้าง",buildings,buildingCard)}${section("📦 การ์ดทรัพยากร",resList,resCard)}${section("💥 การ์ดขัดขวาง",obstacles,obsCard)}`;
+ return out||`<div class="notice">ยังไม่มีการ์ดในมือ</div>`;
 }
 function tradeView(p){
+ const isTurn=room.queue?.[0]===uid;
+ const actionsLeft=room.actionsLeft??ACTIONS_PER_TURN;
  const incoming=(room.offers||[]).filter(o=>o.to===uid&&o.status==="pending");
  const outgoing=(room.offers||[]).filter(o=>o.from===uid&&o.status==="pending");
- return `<div class="section-title"><h3>🤝 ตลาดทรัพยากร</h3><span class="sub">ขายให้ธนาคาร หรือเสนอราคาให้ผู้เล่นอื่น</span></div>
- <div class="row">
+ return `<div class="section-title"><h3>🤝 ตลาดทรัพยากร</h3><span class="sub">${isTurn?`ตาคุณ • เหลือ ${actionsLeft} แอคชั่น`:`รอตาของ ${esc(playerName(room.queue?.[0]))}`}</span></div>
+ ${isTurn?`<div class="row">
    <div class="card" style="padding:12px"><b>🏦 ขายคืนธนาคาร</b>${["wood","brick","energy"].map(k=>`<div class="row" style="margin-top:6px"><span>${RES[k].i}${RES[k].n} × ${RES[k].sell}💰</span><button class="btn gold" onclick="bankSell('${k}',1)">ขาย 1</button></div>`).join("")}</div>
-   <div class="card" style="padding:12px"><b>💱 เสนอซื้อจากผู้เล่น</b>
+   <div class="card" style="padding:12px"><b>💱 เสนอซื้อจากผู้เล่น (คุณคือผู้ซื้อ)</b>
     <label>ผู้ขาย</label><select id="seller">${room.players.filter(x=>x.uid!==uid).map(x=>`<option value="${x.uid}">${esc(x.name)}</option>`).join("")}</select>
     <label>ทรัพยากร</label><select id="offerRes">${["wood","brick","energy"].map(k=>`<option value="${k}">${RES[k].i}${RES[k].n}</option>`).join("")}</select>
-    <div class="row"><div><label>จำนวน</label><input id="offerQty" type="number" min="1" value="1"></div><div><label>ราคา 💰</label><input id="offerPrice" type="number" min="0" value="5"></div></div>
-    <button class="btn gold" style="width:100%;margin-top:8px" onclick="sendOffer(document.getElementById('seller').value,document.getElementById('offerRes').value,document.getElementById('offerQty').value,document.getElementById('offerPrice').value)">ส่งข้อเสนอ</button>
+    <div class="row"><div><label>จำนวน</label><input id="offerQty" type="number" min="1" value="1"></div><div><label>ราคาที่เสนอจ่าย 💰</label><input id="offerPrice" type="number" min="0" value="5"></div></div>
+    <button class="btn gold" style="width:100%;margin-top:8px" onclick="sendOffer(document.getElementById('seller').value,document.getElementById('offerRes').value,document.getElementById('offerQty').value,document.getElementById('offerPrice').value)">ส่งข้อเสนอซื้อ</button>
    </div>
- </div>
- ${incoming.length?`<h4 style="margin:14px 0 7px">📨 ข้อเสนอที่ส่งถึงคุณ</h4><div class="trade-list">${incoming.map(o=>`<div class="trade">👤 <b>${esc(playerName(o.from))}</b> เสนอซื้อ ${RES[o.res].i}${RES[o.res].n} × ${o.qty} ราคา <b>${o.price}💰</b><div class="row" style="margin-top:7px"><button class="btn green" onclick="answerOffer('${o.id}',true)">ยอมรับ</button><button class="btn red" onclick="answerOffer('${o.id}',false)">ปฏิเสธ</button></div></div>`).join("")}</div>`:""}
- ${outgoing.length?`<div class="notice" style="margin-top:10px">📨 ข้อเสนอที่รอคำตอบ ${outgoing.length} รายการ</div>`:""}
- <div class="center" style="margin-top:14px"><button class="btn green" onclick="finishTrade()" ${p.tradeDone?"disabled":""}>${p.tradeDone?"✓ เสร็จแล้ว":"✓ จบช่วงซื้อขายของฉัน"}</button></div>`;
+ </div>`:""}
+ ${incoming.length?`<h4 style="margin:14px 0 7px">📨 มีคนขอซื้อจากคุณ</h4><div class="trade-list">${incoming.map(o=>`<div class="trade">👤 <b>${esc(playerName(o.from))}</b> ขอซื้อ ${RES[o.res].i}${RES[o.res].n} × ${o.qty} จากคุณ ในราคา <b>${o.price}💰</b><div class="row" style="margin-top:7px"><button class="btn green" onclick="answerOffer('${o.id}',true)">ขายให้</button><button class="btn red" onclick="answerOffer('${o.id}',false)">ปฏิเสธ</button></div></div>`).join("")}</div>`:""}
+ ${outgoing.length?`<div class="notice" style="margin-top:10px">📨 ข้อเสนอซื้อของคุณที่รอคำตอบ ${outgoing.length} รายการ</div>`:""}
+ ${isTurn?`<div class="center" style="margin-top:14px"><button class="btn green" onclick="endMyTurn()">✓ จบตาซื้อขายของฉัน</button></div>`:`<div class="notice" style="margin-top:10px">⏳ รอตาของ ${esc(playerName(room.queue?.[0]))}</div>`}`;
 }
 function auctionView(p){
  const a=room.auction||{},b=BUILDINGS[a.buildingIndex]||BUILDINGS[0],submitted=a.bids?.[uid]!==undefined;
  if(a.revealed)return `<div class="auction-card"><div class="icon">${b.ic}</div><h2>${b.n}</h2><div class="cost">ใช้สร้าง: 🪵${b.cost.wood} 🧱${b.cost.brick} ⚡${b.cost.energy} 💰${b.cost.gold} • ⭐${b.pts}</div></div>
  <div class="reveal">${room.players.map(x=>`<div class="bidresult ${a.result?.winnerUid===x.uid?"win":""}"><b>${esc(x.name)}</b><div>${a.bids[x.uid]||0} 💰</div>${a.result?.winnerUid===x.uid?"🏆 ชนะ":""}</div>`).join("")}</div>
- <div class="center" style="margin-top:13px">${a.result?.winnerUid?`🏆 ${esc(playerName(a.result.winnerUid))} ชนะที่ ${a.result.price}💰`:"ไม่มีผู้ชนะ"}<br><button class="btn gold" style="margin-top:10px" onclick="nextAuction()">การ์ดประมูลถัดไป ➜</button></div>`;
- return `<div class="auction-card"><div class="icon">${b.ic}</div><h2>${b.n}</h2><div>${b.d}</div><div class="cost">สร้างใช้ 🪵${b.cost.wood} 🧱${b.cost.brick} ⚡${b.cost.energy} 💰${b.cost.gold} • ⭐${b.pts}</div><div class="cost">* ยังไม่รวมค่าที่ดิน — เลือกพื้นที่ตอนสร้างในรอบเล่น แต่ละที่ราคา/โบนัสต่างกัน</div></div>
- <div class="notice center" style="margin-top:12px">🔒 ทุกคนลงราคาได้พร้อมกัน และจะไม่มีใครเห็นราคาของคนอื่นจนกว่าทุกคนจะกดยืนยัน</div>
+ <div class="center" style="margin-top:13px">${a.result?.winnerUid?`🏆 ${esc(playerName(a.result.winnerUid))} ชนะที่ ${a.result.price}💰`:"ไม่มีผู้ชนะ"}<br>${room.hostUid===uid?`<button class="btn gold" style="margin-top:10px" onclick="nextAuction()">การ์ดประมูลถัดไป ➜</button>`:`<div class="sub" style="margin-top:8px">⏳ รอหัวห้องกดไปยังการ์ดถัดไป</div>`}</div>`;
+ return `<div class="auction-card"><div class="icon">${b.ic}</div><h2>${b.n}</h2><div>${b.d}</div><div class="cost">สร้างใช้ 🪵${b.cost.wood} 🧱${b.cost.brick} ⚡${b.cost.energy} 💰${b.cost.gold} • ⭐${b.pts}</div><div class="cost">* ยังไม่รวมค่าที่ดิน — เลือกพื้นที่ตอนสร้างในรอบเล่น</div></div>
+ <div class="notice center" style="margin-top:12px">🔒 ทุกคนลงราคาได้พร้อมกัน (ไม่ต้องรอตา) และจะไม่มีใครเห็นราคาของคนอื่นจนกว่าทุกคนจะกดยืนยัน</div>
  <div class="bidbox"><input id="bidInput" type="number" min="0" max="${p.resources.gold}" placeholder="ใส่ราคาที่ต้องการประมูล" ${submitted?"disabled":""}><button class="btn gold" onclick="submitBid(document.getElementById('bidInput').value)" ${submitted?"disabled":""}>${submitted?"✓ ลงราคาแล้ว":"ยืนยันราคา"}</button></div>
  <div class="hidden-status">${Object.keys(a.bids||{}).length}/${room.players.length} คนลงราคาแล้ว • ราคาของคุณจะถูกซ่อนจนกว่าทุกคนจะลงครบ</div>`;
 }
 function playView(p){
- const canAct=!p.playDone;
- const hasSel=canAct&&!!selectedBuilding;
- return `<div class="section-title"><h3>🏗️ สร้างเมือง / เล่นการ์ด</h3><span class="sub">${canAct?(hasSel?"เลือกพื้นที่บนกระดานเพื่อสร้าง":"เล่นได้เลย"):"คุณจบตานี้แล้ว รอผู้เล่นคนอื่น"}</span></div>
+ const isTurn=room.queue?.[0]===uid;
+ const actionsLeft=room.actionsLeft??ACTIONS_PER_TURN;
+ const hasSel=isTurn&&!!selectedBuilding;
+ return `<div class="section-title"><h3>🏗️ สร้างเมือง / เล่นการ์ด</h3><span class="sub">${isTurn?(hasSel?"เลือกพื้นที่บนกระดานเพื่อสร้าง":`ตาคุณ • เหลือ ${actionsLeft} แอคชั่น`):`รอตาของ ${esc(playerName(room.queue?.[0]))}`}</span></div>
  <div class="board">${room.board.map((c,i)=>{
    if(c)return `<div class="tile" style="border:2px solid ${colorForUid(c.ownerUid)}"><div class="icon">${c.ic}</div><small>${esc(c.owner)}</small></div>`;
    const plot=PLOTS[i];
@@ -479,23 +559,26 @@ function playView(p){
  }).join("")}</div>
  <div class="sub center" style="margin-top:6px">🌳 ทั่วไป (ฟรี) • 🌊 ริมน้ำ (ราคา+บัฟกลาง) • 🌆 ใจกลางเมือง (ราคาสูง บัฟเยอะสุด)</div>
  <h4 style="margin:15px 0 7px">🃏 การ์ดในมือ</h4>
- <div class="notice" style="margin-bottom:8px">แตะการ์ด <b>สิ่งปลูกสร้าง</b> เพื่อเลือก แล้วแตะพื้นที่ว่างบนกระดานเพื่อสร้าง (ต้องจ่ายทั้งทรัพยากรของการ์ด + ค่าที่ดินของพื้นที่นั้น) • แตะการ์ด <b>ขัดขวาง</b> เพื่อเลือกเป้าหมาย</div>
+ ${isTurn?`<div class="notice" style="margin-bottom:8px">แตะการ์ด <b>สิ่งปลูกสร้าง</b> เพื่อเลือก แล้วแตะพื้นที่ว่างบนกระดานเพื่อสร้าง • แตะการ์ด <b>ขัดขวาง</b>/<b>ทรัพยากร</b> เพื่อใช้ทันที (แต่ละอย่างนับเป็น 1 แอคชั่น จากทั้งหมด ${ACTIONS_PER_TURN} แอคชั่นต่อตา)</div>`:""}
  ${handView(p)}
- ${canAct?`<div class="center" style="margin-top:12px"><button class="btn gold" onclick="endTurn()">✓ จบตาของฉัน</button></div>`:""}`;
+ ${isTurn?`<div class="center" style="margin-top:12px"><button class="btn gold" onclick="endMyTurn()">✓ จบตาของฉัน</button></div>`:`<div class="notice" style="margin-top:10px">⏳ รอตาของ ${esc(playerName(room.queue?.[0]))}</div>`}`;
 }
 function resaleView(p){
+ const isTurn=room.queue?.[0]===uid;
+ const actionsLeft=room.actionsLeft??ACTIONS_PER_TURN;
  const mine=room.board.map((t,i)=>({t,i})).filter(x=>x.t&&x.t.ownerUid===uid&&!(room.listings||[]).some(l=>l.tile===x.i&&!l.closed));
  const active=(room.listings||[]).filter(l=>!l.closed);
- return `<div class="section-title"><h3>🏷️ ประมูลทรัพย์สินที่สร้างสำเร็จแล้ว</h3><span class="sub">เปิดประมูลให้ผู้เล่นอื่นแข่งราคา — ถ้าไม่มีใครสนใจจะขายคืนเกมให้อัตโนมัติ</span></div>
- ${mine.length?`<div class="inventory">${mine.map(x=>`<div class="building" style="border-color:${colorForUid(uid)}"><h4>${x.t.ic} ${esc(x.t.n)}</h4><small>ราคากลาง 💰${x.t.cost?.gold||0}</small><div class="row" style="margin-top:6px"><button class="btn gold" style="width:100%" onclick="listBuilding(${x.i})">🏷️ เปิดประมูล (เริ่มที่ ${Math.round((x.t.cost?.gold||0)*RESALE_MULT)}💰 • ไม่มีคนสนใจ = คืนเกมอัตโนมัติที่ ${buybackValue(x.t.cost)}💰)</button></div></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีทรัพย์สินที่สร้างสำเร็จให้ขาย</div>`}
+ return `<div class="section-title"><h3>🏷️ ประมูลทรัพย์สินที่สร้างสำเร็จแล้ว</h3><span class="sub">${isTurn?`ตาคุณ • เหลือ ${actionsLeft} แอคชั่น`:`รอตาของ ${esc(playerName(room.queue?.[0]))}`}</span></div>
+ ${isTurn?(mine.length?`<div class="inventory">${mine.map(x=>`<div class="building"><h4>${x.t.ic} ${esc(x.t.n)}</h4><small>ราคากลาง 💰${x.t.cost?.gold||0}</small><div class="row" style="margin-top:6px"><button class="btn gold" style="width:100%" onclick="listBuilding(${x.i})">🏷️ เปิดประมูล (เริ่มที่ ${Math.round((x.t.cost?.gold||0)*RESALE_MULT)}💰)</button></div></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีทรัพย์สินที่สร้างสำเร็จให้ขาย</div>`):""}
  ${active.length?`<h4 style="margin:14px 0 7px">📋 รายการเปิดประมูล</h4><div class="trade-list">${active.map(l=>{
    const top=Object.keys(l.bids||{}).length?Math.max(...Object.values(l.bids)):null;
    const isMine=l.sellerUid===uid;
    return `<div class="trade"><b>${l.building.ic} ${esc(l.building.n)}</b> — ผู้ขาย ${esc(playerName(l.sellerUid))} • เปิดที่ ${l.startPrice}💰 • สูงสุดตอนนี้ ${top!==null?top+"💰":"ยังไม่มีผู้เสนอ"}
-   ${isMine?`<div class="sub" style="margin-top:6px">รอจนจบรอบนี้ — ถ้าไม่มีผู้เสนอราคาจะขายคืนเกมอัตโนมัติที่ 💰${buybackValue(l.building.cost)}</div>`
-   :`<div class="row" style="margin-top:7px"><input type="number" id="bid-${l.id}" placeholder="เสนอราคา"><button class="btn gold" onclick="bidListing('${l.id}',document.getElementById('bid-${l.id}').value)">เสนอราคา</button></div>`}</div>`;
+   ${isMine?`<div class="sub" style="margin-top:6px">ถ้าไม่มีผู้เสนอราคาจนจบรอบจะขายคืนเกมอัตโนมัติที่ 💰${buybackValue(l.building.cost)}</div>`
+   :isTurn?`<div class="row" style="margin-top:7px"><input type="number" id="bid-${l.id}" placeholder="เสนอราคา"><button class="btn gold" onclick="bidListing('${l.id}',document.getElementById('bid-${l.id}').value)">เสนอราคา</button></div>`
+   :""}</div>`;
  }).join("")}</div>`:""}
- <div class="center" style="margin-top:14px"><button class="btn green" onclick="finishResale()" ${p.resaleDone?"disabled":""}>${p.resaleDone?"✓ เสร็จแล้ว":"✓ จบช่วงประมูลทรัพย์สินของฉัน"}</button></div>`;
+ ${isTurn?`<div class="center" style="margin-top:14px"><button class="btn green" onclick="endMyTurn()">✓ จบตาประมูลทรัพย์สินของฉัน</button></div>`:`<div class="notice" style="margin-top:10px">⏳ รอตาของ ${esc(playerName(room.queue?.[0]))}</div>`}`;
 }
 function openObstacle(id){
  const c=me().cards.find(x=>x.id===id);if(!c)return;
@@ -505,7 +588,12 @@ function openObstacle(id){
 }
 function closeModal(){document.getElementById("modal").style.display="none"}
 function phaseBody(p){
- if(room.roundPhase==="draw")return `<div class="center"><div style="font-size:58px">🃏</div><h3>จั่วการ์ด 5 ใบ</h3><div class="sub" style="margin:7px 0 15px">การ์ดทรัพยากรจะเก็บไว้ใช้/สะสม ส่วนการ์ดขัดขวางจะเก็บไว้เล่นในช่วงสร้าง/เล่น</div>${p.drawDone?`<div class="notice">✓ คุณจั่วครบ 5 ใบแล้ว — รอผู้เล่นคนอื่น (${room.players.filter(x=>x.drawDone).length}/${room.players.length})</div>`:`<button class="btn green" onclick="drawFive()">🃏 จั่ว 5 ใบ</button>`}<div style="margin-top:14px">${handView(p)}</div></div>`;
+ if(room.roundPhase==="draw"){
+   const isTurn=room.queue?.[0]===uid;
+   return `<div class="center"><div style="font-size:58px">🃏</div><h3>จั่วการ์ด 5 ใบ</h3><div class="sub" style="margin:7px 0 15px">สลับกันจั่วทีละคนตามลำดับ</div>
+   ${isTurn?`<button class="btn green" onclick="drawFive()">🃏 จั่ว 5 ใบ (ตาคุณ)</button>`:`<div class="notice">⏳ รอตาของ ${esc(playerName(room.queue?.[0]))}</div>`}
+   <div style="margin-top:14px">${handView(p)}</div></div>`;
+ }
  if(room.roundPhase==="trade")return tradeView(p);
  if(room.roundPhase==="resale")return resaleView(p);
  if(room.roundPhase==="auction")return auctionView(p);
@@ -534,9 +622,9 @@ function homeView(){
  <label>เงื่อนไขชนะ</label><select id="wmSel" onchange="setWinMode(this.value)"><option value="score" ${winMode==="score"?"selected":""}>คะแนนถึงเป้าหมาย</option><option value="collect" ${winMode==="collect"?"selected":""}>สะสมอาคารครบ + เงินถึงเป้า</option></select>
  ${winMode==="score"?`<label>คะแนนเป้าหมาย</label><input id="wt" type="number" value="${winScore}">`:
  `<div class="row"><div><label>บ้าน 🏠</label><input id="wh" type="number" value="${winHouse}"></div><div><label>อาคารกลาง 🏬</label><input id="wmi" type="number" value="${winMid}"></div></div><div class="row"><div><label>ตึกใหญ่ 🏙️</label><input id="wl" type="number" value="${winLarge}"></div><div><label>เงิน 💰</label><input id="wg" type="number" value="${winGold}"></div></div>`}
- <button class="btn green" style="width:100%;margin-top:12px" onclick="newMaxP=Number(document.getElementById('mx').value);confirmCreate(document.getElementById('nm').value)">สร้างเกม</button></div>`:""}
+ <button class="btn green" style="width:100%;margin-top:12px" onclick="confirmCreate(document.getElementById('nm').value)">สร้างเกม</button></div>`:""}
  ${joinMode==="join"?`<div style="text-align:left;margin-top:16px"><label>ชื่อ</label><input id="nm2" value="${esc(n)}" placeholder="ชื่อผู้เล่น"><label>รหัสห้อง</label><input id="cd" value="${esc(c)}" maxlength="4" style="text-transform:uppercase;letter-spacing:4px"><button class="btn gold" style="width:100%;margin-top:12px" onclick="joinRoom(document.getElementById('cd').value,document.getElementById('nm2').value)">เข้าร่วมเกม</button></div>`:""}</div>
- <div class="sub center" style="margin-top:12px">ทุกคนเล่นจากมือถือ/คอมคนละเครื่องได้ ผ่าน Firebase</div>`;
+ <div class="sub center" style="margin-top:12px">ทุกคนเล่นจากมือถือ/คอมคนละเครื่องได้ ผ่าน Firebase • สลับกันเล่นทีละคนตามลำดับที่หมุนเวียนทุกรอบ</div>`;
 }
 function lobbyView(){
  const host=room.hostUid===uid;return `<div class="lights">${"<i></i>".repeat(9)}</div><div class="card"><div class="center"><div class="sub">รหัสห้อง</div><div class="code" style="display:inline-block;font-size:28px;margin-top:6px">${room.code}</div><div class="sub" style="margin-top:6px">แชร์รหัสนี้ให้เพื่อน</div></div>${playersBar()}<div class="center" style="margin-top:12px">${host?`<button class="btn green" onclick="startGame()" ${room.players.length<2?"disabled":""}>🎬 เริ่มเกม ${room.players.length}/${room.maxPlayers}</button>`:`<div class="notice">⏳ รอหัวโต๊ะเริ่มเกม...</div>`}</div></div>`;
@@ -569,7 +657,7 @@ function setJoinMode(mode) {
 }
 
 /* ===================== GLOBALS ===================== */
-Object.assign(window,{createRoom,joinRoom,startGame,leave,setJoinMode,drawFive,bankSell,sendOffer,answerOffer,finishTrade,submitBid,nextAuction,buildAt,selectBuildingCard,playResource,playObstacle,endTurn,openObstacle,closeModal,setWinMode,confirmCreate,listBuilding,bidListing,finishResale,showWinPopup,showMyPermits,showMyBuildings});
+Object.assign(window,{createRoom,joinRoom,startGame,leave,setJoinMode,drawFive,bankSell,sendOffer,answerOffer,endMyTurn,submitBid,nextAuction,buildAt,selectBuildingCard,playResource,playObstacle,openObstacle,closeModal,setWinMode,confirmCreate,listBuilding,bidListing,showWinPopup,showMyPermits,showMyBuildings});
 uid=localStorage.getItem("ctp_uid");if(!uid){uid="guest-"+Math.random().toString(36).slice(2,10);localStorage.setItem("ctp_uid",uid)}
 (async()=>{if(!db){err="กรุณาใส่ firebaseConfig ก่อนใช้งาน";render();return}
  const saved=localStorage.getItem("ctp_code");if(saved){try{const d=await getDoc(doc(db,"rooms",saved));if(d.exists()&&d.data().players.some(p=>p.uid===uid)){code=saved;subscribe();return}}catch(e){}}
