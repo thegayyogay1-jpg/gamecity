@@ -49,7 +49,12 @@ label{display:block;color:var(--muted);font-size:12px;margin:10px 0 4px}
 .hand{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.playing-card{min-height:145px;background:linear-gradient(145deg,#fff9e9,#e6d4af);color:var(--ink);
 border-radius:14px;padding:10px;position:relative;box-shadow:0 7px 14px #0006;border:3px solid #fff;cursor:pointer}
 .playing-card .icon{font-size:32px}.playing-card .cn{font-weight:800;font-size:13px}.playing-card .cd{font-size:10px;color:#66533b;margin-top:4px}
-.playing-card.obstacle{background:linear-gradient(145deg,#ffe1dc,#e9b0aa)}.playing-card.buildingcard{background:linear-gradient(145deg,#dff3ff,#b9dcf2)}.playing-card.selected{outline:3px solid var(--gold);transform:translateY(-4px)}
+.playing-card.obstacle{background:linear-gradient(145deg,#ffe1dc,#e9b0aa)}.playing-card.buildingcard{background:none;padding:0;overflow:hidden}.playing-card.selected{outline:3px solid var(--gold);transform:translateY(-4px)}
+.bcard{width:100%;aspect-ratio:3/4;border-radius:12px;overflow:hidden;background:#fdf6e6;box-shadow:0 6px 14px #0006;border:2px solid #fff;display:flex;flex-direction:column;position:relative}
+.bcard .hd{padding:7px 4px;text-align:center;font-weight:800;font-size:11px;color:#fff;text-shadow:0 1px 2px #0005}
+.bcard .art{flex:1;display:flex;align-items:center;justify-content:center;font-size:40px;background:linear-gradient(180deg,#bfe3f7 0%,#d7edc9 65%,#c3e3b8 100%);position:relative;min-height:54px}
+.bcard .nameplate{background:#fdf6e6;text-align:center;padding:5px 3px;font-weight:700;font-size:11px;border-top:2px solid #e3d2a5;color:#3a2a14}
+.bcard .num{position:absolute;left:5px;bottom:5px;background:#2a1c10;color:#fff;font-size:10px;font-weight:800;width:17px;height:17px;border-radius:50%;display:flex;align-items:center;justify-content:center;z-index:2;box-shadow:0 1px 3px #0006}
 .tile.buildable{cursor:pointer;box-shadow:0 0 0 2px var(--gold) inset}.tile.buildable:active{transform:scale(.95)}
 .tag{position:absolute;right:6px;top:6px;font-size:9px;padding:2px 5px;border-radius:6px;background:#0002;font-weight:800}
 .auction-card{max-width:380px;min-height:260px;margin:18px auto;position:relative;overflow:hidden;background:radial-gradient(ellipse at 50% 35%,#fffef5 0,#f6e9c9 58%,#dfc99d 100%);color:#30200e;border:8px solid #f7e9c9;border-radius:18px;padding:20px 18px;text-align:center;box-shadow:0 18px 28px #0009, inset 0 0 0 2px #a77b36, inset 0 0 0 5px #fff8; transform:rotate(-1deg)}
@@ -103,13 +108,18 @@ const PLOT_TYPES=[
  {name:"พื้นที่โล่ง",ic:"🟫",price:2500,prod:{}}
 ];
 const BUILDINGS=[
- {n:"บ้านพักอาศัย",ic:"🏠",basePrice:4000,prod:{wood:1,gold:500},pts:15,tier:0},
- {n:"ร้านค้า",ic:"🏪",basePrice:6000,prod:{energy:1,gold:600},pts:20,tier:0},
- {n:"โรงงานขนาดเล็ก",ic:"🏭",basePrice:8000,prod:{brick:2,wood:1,gold:1200},pts:30,tier:1},
- {n:"สำนักงาน",ic:"🏢",basePrice:10000,prod:{energy:2,gold:1500},pts:35,tier:1},
- {n:"โรงไฟฟ้า",ic:"🏗️",basePrice:12000,prod:{energy:2,gold:2300},pts:45,tier:2},
- {n:"ห้างสรรพสินค้า",ic:"🏬",basePrice:16000,prod:{brick:2,wood:2,gold:2900},pts:55,tier:2}
+ {n:"บ้านเล็ก",ic:"🏠",basePrice:3500,prod:{wood:1,gold:400},pts:12,tier:0},
+ {n:"บ้านใหญ่",ic:"🏡",basePrice:6000,prod:{wood:2,gold:800},pts:20,tier:0},
+ {n:"ตึกหอ",ic:"🏢",basePrice:13000,prod:{energy:2,gold:2200},pts:45,tier:2},
+ {n:"ตลาดสด",ic:"🥬",basePrice:4500,prod:{wood:1,brick:1,gold:500},pts:15,tier:0},
+ {n:"ร้านค้า",ic:"🏪",basePrice:5000,prod:{energy:1,gold:600},pts:17,tier:0},
+ {n:"โรงงาน",ic:"🏭",basePrice:8500,prod:{brick:2,wood:1,gold:1100},pts:28,tier:1},
+ {n:"สวนสนุก",ic:"🎡",basePrice:14000,prod:{gold:2600},pts:48,tier:2},
+ {n:"ซูเปอร์มาร์เก็ต",ic:"🛒",basePrice:9000,prod:{energy:1,gold:1300},pts:30,tier:1},
+ {n:"ห้างสรรพสินค้า",ic:"🏬",basePrice:16000,prod:{brick:2,wood:2,gold:3200},pts:55,tier:2},
+ {n:"ร้านอาหาร",ic:"🍽️",basePrice:7500,prod:{energy:1,gold:1000},pts:26,tier:1}
 ];
+const CARD_COLORS=["#2d4a6b","#2d4a6b","#2d4a6b","#c9772e","#3f7a45","#2d4a6b","#3f7a45","#1f6b63","#c9772e","#6b4226"];
 const DECK=[
  {id:"wood",ic:"🪵",n:"ไม้",type:"resource",desc:"รับไม้ +2",eff:{wood:2},w:4},
  {id:"brick",ic:"🧱",n:"อิฐ",type:"resource",desc:"รับอิฐ +2",eff:{brick:2},w:4},
@@ -134,6 +144,11 @@ const roomRef=()=>doc(db,"rooms",code);
 const me=()=>room?.players?.find(p=>p.uid===uid);
 const weightedCard=()=>{let a=[];DECK.forEach(c=>{for(let i=0;i<(c.w||1);i++)a.push(c)});return a[Math.floor(Math.random()*a.length)]};
 function prodText(prod){return Object.entries(prod||{}).filter(([k,v])=>v).map(([k,v])=>k==='gold'?`💰+${v}`:`${RES[k].i}+${v}`).join(' ')||'ไม่มี'}
+function buildingCardFace(bi){
+ const b=BUILDINGS[bi];if(!b)return"";
+ const col=CARD_COLORS[bi]||"#2d4a6b";
+ return `<div class="bcard"><div class="num">${bi+1}</div><div class="hd" style="background:${col}">${esc(b.n)}</div><div class="art">${b.ic}</div><div class="nameplate">${esc(b.n)}</div></div>`;
+}
 function playerName(u){return room.players.find(p=>p.uid===u)?.name||"ผู้เล่น"}
 async function patch(x){await updateDoc(roomRef(),x)}
 async function withFreshRoom(fn){const snap=await getDoc(roomRef());if(!snap.exists())return;return fn(snap.data())}
@@ -501,7 +516,7 @@ function colorForUid(u){
 }
 function showMyPermits(){
  const p=me();const items=(p?.cards||[]).filter(c=>c.type==="building");
- const body=items.length?`<div class="inventory">${items.map(c=>`<div class="building"><h4>${c.ic} ${c.n}</h4><small>ผลผลิต/รอบ: ${prodText(c.prod)} • ⭐${c.pts}</small></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีการ์ดสิ่งปลูกสร้างที่รอสร้าง — ต้องประมูลให้ได้ก่อน</div>`;
+ const body=items.length?`<div class="inventory">${items.map(c=>`<div style="text-align:center">${buildingCardFace(c.buildingIndex)}<small>ผลผลิต/รอบ: ${prodText(c.prod)} • ⭐${c.pts}</small></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีการ์ดสิ่งปลูกสร้างที่รอสร้าง — ต้องประมูลให้ได้ก่อน</div>`;
  const m=document.getElementById("modal");
  m.innerHTML=`<div class="card" style="max-width:440px;margin:10vh auto"><div class="section-title"><h3>🎫 การ์ดสิ่งปลูกสร้างของฉัน</h3></div><div class="sub" style="margin-bottom:10px">รายการที่ประมูลได้แล้วแต่ยังไม่ได้สร้าง</div>${body}<button class="btn ghost" style="width:100%;margin-top:12px" onclick="closeModal()">ปิด</button></div>`;
  m.style.display="block";
@@ -513,7 +528,10 @@ function showMyBuildings(){
  const w=room.win||{type:"score",target:100};
  const progress=w.type==="collect"?`<div class="notice" style="margin-bottom:10px">🎯 เป้าหมาย: 🏠${w.house} 🏬${w.mid} 🏙️${w.large} 💰${w.gold}<br>📊 ตอนนี้คุณมี: 🏠${counts[0]} 🏬${counts[1]} 🏙️${counts[2]} 💰${p.resources.gold}</div>`
  :`<div class="notice" style="margin-bottom:10px">🎯 เป้าหมาย: ทำคะแนนให้ถึง ⭐${w.target}<br>📊 ตอนนี้คุณมี ⭐${p.score} แต้ม</div>`;
- const body=mine.length?`<div class="inventory">${mine.map(x=>`<div class="building" style="border-color:${colorForUid(uid)}"><h4>${PLOTS[x.i].ic} ${esc(PLOTS[x.i].name)}${x.t.building?` + ${x.t.building.ic} ${esc(x.t.building.n)}`:""}</h4><small>ผลผลิต/รอบ: ${prodText({...PLOTS[x.i].prod,...(x.t.building?.prod||{})})}</small></div>`).join("")}</div>`:`<div class="notice">คุณยังไม่มีที่ดิน/สิ่งปลูกสร้าง</div>`;
+ const body=mine.length?`<div class="inventory">${mine.map(x=>x.t.building?
+ `<div style="text-align:center">${buildingCardFace(x.t.building.buildingIndex)}<small>${esc(PLOTS[x.i].name)} • ผลผลิต: ${prodText({...PLOTS[x.i].prod,...(x.t.building.prod||{})})}</small></div>`
+ :`<div class="building" style="border-color:${colorForUid(uid)}"><h4>${PLOTS[x.i].ic} ${esc(PLOTS[x.i].name)}</h4><small>ผลผลิต/รอบ: ${prodText(PLOTS[x.i].prod)}</small></div>`
+ ).join("")}</div>`:`<div class="notice">คุณยังไม่มีที่ดิน/สิ่งปลูกสร้าง</div>`;
  const m=document.getElementById("modal");
  m.innerHTML=`<div class="card" style="max-width:440px;margin:10vh auto"><div class="section-title"><h3>🏙️ ที่ดิน/สิ่งปลูกสร้างของฉัน</h3></div>${progress}${body}<button class="btn ghost" style="width:100%;margin-top:12px" onclick="closeModal()">ปิด</button></div>`;
  m.style.display="block";
@@ -549,9 +567,9 @@ function handView(p){
    const sel=selectedBuilding===c.id;
    const action=clickable?`selectBuildingCard('${c.id}')`:"";
    return `<div class="playing-card buildingcard${sel?" selected":""}" ${action?`onclick="${action}"`:""}>
-   <span class="tag">สิ่งปลูกสร้าง</span><div class="icon">${c.ic}</div><div class="cn">${esc(c.n)}</div>
-   <div class="cd">ผลผลิต/รอบ: ${prodText(c.prod)} • ⭐${c.pts}</div>
-   ${clickable?`<div class="cd" style="margin-top:7px;font-weight:800">${sel?"✓ เลือกแล้ว แตะที่ดินของคุณ":"แตะเพื่อเลือกสร้าง"}</div>`:""}</div>`;
+   ${buildingCardFace(c.buildingIndex)}
+   <div class="cd" style="padding:6px 8px 8px;text-align:center">ผลผลิต/รอบ: ${prodText(c.prod)} • ⭐${c.pts}
+   ${clickable?`<div style="margin-top:4px;font-weight:800">${sel?"✓ เลือกแล้ว แตะที่ดินของคุณ":"แตะเพื่อเลือกสร้าง"}</div>`:""}</div></div>`;
  };
  const resCard=c=>`<div class="playing-card" ${clickable?`onclick="playResource('${c.id}')"`:""}>
  <span class="tag">ทรัพยากร</span><div class="icon">${c.ic}</div><div class="cn">${esc(c.n)}</div><div class="cd">${esc(c.desc)}</div>${clickable?`<div class="cd" style="margin-top:7px;font-weight:800">แตะเพื่อใช้การ์ด</div>`:""}</div>`;
@@ -580,11 +598,15 @@ function tradeView(p){
  ${isTurn?`<div class="center" style="margin-top:14px"><button class="btn green" onclick="endMyTurn()">✓ จบตาซื้อขายของฉัน</button></div>`:`<div class="notice" style="margin-top:10px">⏳ รอตาของ ${esc(playerName(room.queue?.[0]))}</div>`}`;
 }
 function auctionView(p){
- const a=room.auction||{},b=BUILDINGS[(a.buildingDeck||[])[a.buildingIndex]??a.buildingIndex]||BUILDINGS[0],submitted=a.bids?.[uid]!==undefined;
- if(a.revealed)return `<div class="center sub">การประมูลใบที่ ${a.buildingIndex+1} / 3</div><div class="auction-card"><div class="icon">${b.ic}</div><h2>${b.n}</h2><div class="card-ribbon">ผลการประมูล</div><div class="cost">ราคาเริ่มต้น 💰${b.basePrice} • ผลผลิต/รอบ: ${prodText(b.prod)} • ⭐${b.pts}</div></div>
+ const a=room.auction||{},bi=(a.buildingDeck||[])[a.buildingIndex]??a.buildingIndex,b=BUILDINGS[bi]||BUILDINGS[0],submitted=a.bids?.[uid]!==undefined;
+ if(a.revealed)return `<div class="center sub">การประมูลใบที่ ${a.buildingIndex+1} / 3</div>
+ <div style="max-width:200px;margin:14px auto">${buildingCardFace(bi)}</div>
+ <div class="center sub">ราคาเริ่มต้น 💰${b.basePrice} • ผลผลิต/รอบ: ${prodText(b.prod)} • ⭐${b.pts}</div>
  <div class="reveal">${room.players.map(x=>`<div class="bidresult ${a.result?.winnerUid===x.uid?"win":""}"><b>${esc(x.name)}</b><div>${a.bids[x.uid]||0} 💰</div>${a.result?.winnerUid===x.uid?"🏆 ชนะ":""}</div>`).join("")}</div>
  <div class="center" style="margin-top:13px">${a.result?.winnerUid?`🏆 ${esc(playerName(a.result.winnerUid))} ชนะที่ ${a.result.price}💰`:"ไม่มีผู้ชนะ (ไม่มีใครเสนอถึงราคาเริ่มต้น)"}<br>${room.hostUid===uid?`<button class="btn gold" style="margin-top:10px" onclick="nextAuction()">การ์ดประมูลถัดไป ➜</button>`:`<div class="sub" style="margin-top:8px">⏳ รอหัวห้องกดไปยังการ์ดถัดไป</div>`}</div>`;
- return `<div class="center sub" style="font-weight:800">🃏 การ์ดประมูลใบที่ ${a.buildingIndex+1} / 3</div><div class="auction-card"><div class="icon">${b.ic}</div><h2>${b.n}</h2><div class="card-ribbon">PROPERTY AUCTION</div><div class="cost">ราคาเริ่มต้นประมูล 💰${b.basePrice}</div><div class="cost">ผลผลิตต่อรอบ: ${prodText(b.prod)} • ⭐${b.pts}</div></div>
+ return `<div class="center sub" style="font-weight:800">🃏 การ์ดประมูลใบที่ ${a.buildingIndex+1} / 3</div>
+ <div style="max-width:220px;margin:14px auto">${buildingCardFace(bi)}</div>
+ <div class="center sub">ราคาเริ่มต้นประมูล 💰${b.basePrice} • ผลผลิตต่อรอบ: ${prodText(b.prod)} • ⭐${b.pts}</div>
  <div class="notice center" style="margin-top:12px">🔒 ทุกคนลงราคาได้พร้อมกัน (ไม่ต้องรอตา) ต้องเสนอ ≥ ราคาเริ่มต้น และจะไม่มีใครเห็นราคาของคนอื่นจนกว่าทุกคนจะกดยืนยัน</div>
  <div class="bidbox"><input id="bidInput" type="number" min="0" max="${p.resources.gold}" placeholder="ราคาประมูล (≥${b.basePrice})" ${submitted?"disabled":""}><button class="btn gold" onclick="submitBid(document.getElementById('bidInput').value)" ${submitted?"disabled":""}>${submitted?"✓ ลงราคาแล้ว":"ยืนยันราคา"}</button></div>
  <div class="hidden-status">${Object.keys(a.bids||{}).length}/${room.players.length} คนลงราคาแล้ว</div>`;
